@@ -6,7 +6,7 @@ Top-down chart view, no diesel, no gelcoat.
 **To run it:** double-click `ssim.html`. That's it — no install, no build step, no server, no
 internet. One self-contained file.
 
-**To check the physics:** open `ssim.html?selftest=1`. It runs fifteen behavioural test cases
+**To check the physics:** open `ssim.html?selftest=1`. It runs eighteen behavioural test cases
 headlessly and prints a pass/fail table with actual-versus-expected numbers.
 
 Also useful: `?drill=3` jumps straight to a drill, `?zoom=9` sets the initial scale.
@@ -26,8 +26,8 @@ changing boat restarts the drill, since her dimensions, cleats and hull outline 
 | **Beneteau First 40.1** | 1986–90 | 8.2 t | deep fin, spade | shaft + 3-blade, or saildrive |
 | **Jeanneau Sun Odyssey 44i** | 2008–12 | 9.8 t | fin, spade | saildrive folding, or shaft |
 
-Only the Catalina and Contessa cannot have thrusters — the buttons grey out, because neither was
-built with a tunnel.
+Only the First 40.1 and the Sun Odyssey can have thrusters. On the Catalina, the Contessa and the
+Hallberg-Rassy the buttons grey out, because none of the three was built with a tunnel.
 
 ### How differently they actually handle
 
@@ -74,7 +74,7 @@ to check most of them.
    It is at full strength the instant you engage from rest, is **down to about half by 2 kn of
    sternway and a third by 3 kn**, and also decays over the first few seconds as axial flow
    establishes — which is why sailors talk about *bursts*: three short kicks walk her further than
-   one long pull. A full astern burst from rest swings her about 12°, uncorrectably.
+   one long pull. A full astern burst from rest swings her about 10°, uncorrectably.
 2. **The rudder has almost no authority at low speed, and none at all in reverse *until you have
    sternway*.** A rudder is a foil and needs flow over it. In ahead gear the propeller throws a jet
    straight over the blade, so you can kick her round without moving — that jet is gated on
@@ -257,7 +257,7 @@ Drill 5 is the one worth dwelling on, and there is a technique to it:
   starboard again — and the reversed helm now works *with* the walk instead of against it.
 
 Both phases turn her the same way and the translation roughly cancels, so she comes round inside her
-own length. Reversing the helm for the astern kick is worth about 23° per 40 seconds over leaving the
+own length. Reversing the helm for the astern kick is worth about 10° per 40 seconds over leaving the
 wheel hard over, and it only matters because she has real steerage astern.
 
 To **port** the whole thing is markedly worse — about 66° per 40 s against 101° — because there the
@@ -358,9 +358,10 @@ are the two I'd most like your judgement on.
 **1. How far she swings on a full astern burst.** The brief asked for 22–28° in five seconds.
 Reaching that needs a transverse force around 45% of thrust, which is far outside anything published
 for prop walk (5–20% steady-state is the usual range; a burst from a standstill with the blades
-heavily loaded is arguably higher). At 24% she swings about **12°**. Three things each fight the walk
+heavily loaded is arguably higher). At `k_pw_astern` 0.45 — about 29% of thrust once the axial flow
+has established — she swings about **10°**. Three things each fight the walk
 and all three are real: her yaw inertia, the resistance of shoving 17.6 tonnes of effective mass
-sideways, and the rudder acting as a fin even reversed. 12° of *uncorrectable* swing per burst is
+sideways, and the rudder acting as a fin even reversed. 10° of *uncorrectable* swing per burst is
 still a lot in a marina — reversing 20 m into a berth leaves you well off line. But if it feels weak
 against the real boat, raise `DRIVES.shaft.k_pw_astern`; that constant is the whole effect.
 
