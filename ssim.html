@@ -1,0 +1,3799 @@
+<title>Marina Docking Simulator — First 40.1</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ==========================================================================
+   SSIM — Marina Docking Simulator
+   Layout: one full-window <canvas> for the world (north-up chart view),
+           DOM overlays for every HUD panel and control.
+   ========================================================================== */
+
+:root {
+  --water:      #0d2b3e;
+  --water-deep: #08202f;
+  --grid:       #17405a;
+  --land:       #3a3527;
+  --land-edge:  #564f3a;
+  --pontoon:    #6f7a82;
+  --ink:        #e8eef2;
+  --ink-dim:    #8ba3b3;
+  --panel:      rgba(6, 20, 30, 0.82);
+  --panel-edge: rgba(140, 190, 220, 0.22);
+  --accent:     #ffb454;
+  --port:       #e5484d;
+  --stbd:       #30a46c;
+  --taut:       #ffb454;
+  --slack:      #5b7285;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: var(--water-deep);
+  color: var(--ink);
+  font: 13px/1.45 ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+#world { position: fixed; inset: 0; display: block; cursor: crosshair; }
+
+/* ----- generic panel chrome ----- */
+.panel {
+  position: fixed;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 9px 11px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  user-select: none;
+}
+.panel h2 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+.row { display: flex; justify-content: space-between; gap: 14px; white-space: nowrap; }
+.row .k { color: var(--ink-dim); }
+.row .v { font-variant-numeric: tabular-nums; }
+.big { font-size: 17px; font-variant-numeric: tabular-nums; }
+
+#p-env    { top: 10px; left: 10px; min-width: 210px; }
+/* Stops short of the mooring-lines panel bottom-right rather than sliding
+   underneath it, and scrolls if the boat notes make it tall. */
+#p-set    { top: 10px; right: 10px; width: 246px; max-height: calc(100vh - 235px); overflow-y: auto; }
+#p-ctl    { bottom: 10px; left: 10px; width: 310px; }
+#p-lines  { bottom: 10px; right: 10px; width: 274px; }
+#p-coach  { bottom: 10px; left: 50%; transform: translateX(-50%); width: 440px; display: none; }
+#p-debrief{ top: 50%; left: 50%; transform: translate(-50%, -50%); width: 420px; display: none; z-index: 20; }
+
+/* ----- settings panel widgets ----- */
+label.field { display: block; margin: 7px 0 2px; font-size: 11px; color: var(--ink-dim); }
+select, button {
+  font: inherit; color: var(--ink);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px; padding: 4px 6px; width: 100%;
+}
+button { cursor: pointer; }
+button:hover { background: rgba(255,255,255,0.13); }
+button:disabled { opacity: 0.32; cursor: not-allowed; }
+button:disabled:hover { background: rgba(255,255,255,0.06); }
+button.active { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
+input[type=range] { width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
+.toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 5px; }
+#boat-dims {
+  margin: 5px 0 3px; font-size: 11px; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+#boat-note { font-size: 11px; line-height: 1.45; color: var(--ink-dim); margin-bottom: 2px; }
+.hr { height: 1px; background: var(--panel-edge); margin: 9px 0; }
+
+/* ----- helm + throttle dials ----- */
+#dials { display: flex; gap: 12px; align-items: center; }
+#dials svg { flex: none; cursor: grab; touch-action: none; }
+#dials svg:active { cursor: grabbing; }
+.dial-face   { fill: rgba(0,0,0,0.35); stroke: var(--panel-edge); }
+.dial-tick   { stroke: var(--ink-dim); stroke-width: 1; }
+.dial-tick.major { stroke: var(--ink); stroke-width: 1.6; }
+.dial-label  { fill: var(--ink-dim); font-size: 8px; text-anchor: middle; }
+.spoke       { stroke: var(--ink); stroke-width: 2.2; stroke-linecap: round; }
+.spoke.king  { stroke: var(--accent); stroke-width: 3.2; }
+.king-mark   { fill: var(--accent); stroke: #1a1206; stroke-width: 0.9; }
+.dial-index  { fill: var(--ink); }
+.lever-track { fill: rgba(0,0,0,0.35); stroke: var(--panel-edge); }
+.lever-knob  { fill: var(--accent); stroke: #1a1206; stroke-width: 1.2; }
+
+/* ----- thruster heat bars ----- */
+.bar { height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+.bar > i { display: block; height: 100%; width: 0%; background: var(--stbd); transition: width 0.1s linear; }
+.bar.hot > i { background: var(--accent); }
+.bar.tripped > i { background: var(--port); }
+
+/* ----- line rows ----- */
+.lrow { display: flex; align-items: center; gap: 7px; padding: 3px 4px; border-radius: 4px; }
+.lrow.sel { background: rgba(255,180,84,0.16); box-shadow: inset 0 0 0 1px rgba(255,180,84,0.4); }
+.lrow .nm  { width: 74px; color: var(--ink-dim); }
+.lrow .bol { width: 30px; text-align: center; font-weight: 700; }
+.lrow .st  { flex: 1; text-align: right; font-variant-numeric: tabular-nums; }
+.lrow.taut  .st { color: var(--taut); }
+.lrow.slack .st { color: var(--slack); }
+.lrow.none  { opacity: 0.4; }
+
+/* ----- coach + debrief ----- */
+#p-coach .msg { margin: 3px 0; }
+#p-coach .msg::before { content: "▸ "; color: var(--accent); }
+#p-debrief h1 { margin: 0 0 4px; font-size: 15px; letter-spacing: 0.02em; }
+#p-debrief .verdict { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--panel-edge); font-size: 14px; }
+.ok { color: var(--stbd); } .warn { color: var(--accent); } .bad { color: var(--port); }
+kbd {
+  background: rgba(255,255,255,0.1); border: 1px solid var(--panel-edge);
+  border-radius: 3px; padding: 0 4px; font-size: 11px;
+}
+#hint { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); color: var(--ink-dim); font-size: 11px; }
+#help {
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 470px; display: none; z-index: 25;
+}
+#help table { border-collapse: collapse; width: 100%; }
+#help td { padding: 2px 0; vertical-align: top; }
+#help td:first-child { width: 130px; white-space: nowrap; }
+
+#selftest {
+  position: fixed; inset: 0; overflow: auto; background: #06141e; padding: 24px 30px; z-index: 50; display: none;
+}
+#selftest table { border-collapse: collapse; font-size: 12px; }
+#selftest td, #selftest th { border: 1px solid #23485f; padding: 4px 9px; text-align: left; vertical-align: top; }
+#selftest th { background: #0d2b3e; }
+</style>
+
+<canvas id="world"></canvas>
+
+<div id="hint">
+  <kbd>←</kbd><kbd>→</kbd> helm &nbsp; <kbd>↑</kbd><kbd>↓</kbd> throttle &nbsp; <kbd>Space</kbd> neutral &nbsp;
+  <kbd>G</kbd> throw line &nbsp; <kbd>H</kbd> keys
+</div>
+
+<!-- ===================== environment readout ===================== -->
+<div class="panel" id="p-env">
+  <h2>Wind &amp; Tide</h2>
+  <div class="row"><span class="k">True wind</span><span class="v" id="v-tw">—</span></div>
+  <div class="row"><span class="k">Apparent</span><span class="v" id="v-aw">—</span></div>
+  <div class="row"><span class="k">Tide</span><span class="v" id="v-tide">—</span></div>
+  <div class="hr"></div>
+  <div class="row"><span class="k">Speed thru water</span><span class="v big" id="v-stw">—</span></div>
+  <div class="row"><span class="k">Over ground</span><span class="v" id="v-sog">—</span></div>
+  <div class="row"><span class="k">Heading</span><span class="v" id="v-hdg">—</span></div>
+  <div class="row"><span class="k">Track</span><span class="v" id="v-trk">—</span></div>
+  <div class="row"><span class="k">Rate of turn</span><span class="v" id="v-rot">—</span></div>
+  <div class="row"><span class="k">Pivot point</span><span class="v" id="v-piv">—</span></div>
+</div>
+
+<!-- ===================== settings / drills ===================== -->
+<div class="panel" id="p-set">
+  <h2>Drill</h2>
+  <select id="s-drill"></select>
+  <button id="b-reset" style="margin-top:5px">Reset &nbsp;<kbd>R</kbd></button>
+
+  <div class="hr"></div>
+  <h2>Conditions</h2>
+  <label class="field">Wind speed <span id="l-wspd"></span></label>
+  <input type="range" id="r-wspd" min="0" max="35" step="1">
+  <label class="field">Wind direction <span id="l-wdir"></span></label>
+  <input type="range" id="r-wdir" min="0" max="350" step="10">
+  <label class="field">Gusts <span id="l-gust"></span></label>
+  <input type="range" id="r-gust" min="0" max="100" step="5">
+  <label class="field">Tide rate <span id="l-tide"></span></label>
+  <input type="range" id="r-tide" min="-25" max="25" step="1">
+
+  <div class="hr"></div>
+  <h2>Boat</h2>
+  <select id="s-boat"></select>
+  <div id="boat-dims"></div>
+  <div id="boat-note"></div>
+  <label class="field">Drivetrain</label>
+  <select id="s-drive"></select>
+  <div class="toggles">
+    <button id="b-bowthr">Bow thruster</button>
+    <button id="b-sternthr">Stern thruster</button>
+  </div>
+
+  <div class="hr"></div>
+  <h2>Learning aids</h2>
+  <div class="toggles">
+    <button id="b-forces">Forces <kbd>F</kbd></button>
+    <button id="b-trail">Trail <kbd>T</kbd></button>
+    <button id="b-coach">Coach</button>
+    <button id="b-debrief">Debrief</button>
+  </div>
+</div>
+
+<!-- ===================== helm + throttle ===================== -->
+<div class="panel" id="p-ctl">
+  <h2>Helm &amp; Engine</h2>
+  <div id="dials">
+    <svg id="svg-wheel" width="88" height="88" viewBox="-44 -44 88 88"></svg>
+    <svg id="svg-lever" width="60" height="88" viewBox="-22 -44 60 88"></svg>
+    <div style="flex:1; min-width:0">
+      <div class="row"><span class="k">Helm</span><span class="v" id="v-helm">—</span></div>
+      <div class="row"><span class="k">Engine</span><span class="v" id="v-thr">—</span></div>
+      <div class="row"><span class="k">Gear</span><span class="v" id="v-gear">—</span></div>
+      <div style="margin-top:6px">
+        <div class="row"><span class="k">Bow thr</span><span class="v" id="v-bow">off</span></div>
+        <div class="bar" id="bar-bow"><i></i></div>
+        <div class="row" style="margin-top:4px"><span class="k">Stern thr</span><span class="v" id="v-stern">off</span></div>
+        <div class="bar" id="bar-stern"><i></i></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== mooring lines ===================== -->
+<div class="panel" id="p-lines">
+  <h2>Mooring Lines</h2>
+  <div id="line-rows"></div>
+  <div class="hr"></div>
+  <div style="color:var(--ink-dim); font-size:11px" id="throw-hint">—</div>
+</div>
+
+<div class="panel" id="p-coach"><h2>Coach</h2><div id="coach-msgs"></div></div>
+<div class="panel" id="p-debrief"></div>
+
+<div class="panel" id="help">
+  <h2>Controls</h2>
+  <table>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd></td><td>helm to port / starboard</td></tr>
+    <tr><td><kbd>X</kbd></td><td>centre the helm</td></tr>
+    <tr><td><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>W</kbd> <kbd>S</kbd></td><td>engine lever ahead / astern</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>slam into neutral</td></tr>
+    <tr><td><kbd>Q</kbd> <kbd>E</kbd></td><td>bow thruster to port / starboard</td></tr>
+    <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>stern thruster to port / starboard</td></tr>
+    <tr><td><kbd>Z</kbd> <kbd>C</kbd></td><td>select bow / spring / stern line</td></tr>
+    <tr><td><kbd>G</kbd></td><td>throw the selected line to the nearest bollard in range</td></tr>
+    <tr><td>click a bollard</td><td>throw the selected line to that one</td></tr>
+    <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>throw to a bollard by number — type both digits for 10 and up; single digits go after a short pause. <kbd>Esc</kbd> cancels.</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>make the line fast (then you can winch it)</td></tr>
+    <tr><td><kbd>M</kbd></td><td><b>make fast alongside</b> — rigs bow, spring and stern to the best bollards on the face she is lying against, all at once so nothing snatches, then tends them up snug</td></tr>
+    <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>pay out / haul in</td></tr>
+    <tr><td><kbd>Backspace</kbd></td><td>slip the line</td></tr>
+    <tr><td><kbd>F</kbd> <kbd>T</kbd></td><td>force arrows / track trail</td></tr>
+    <tr><td><kbd>P</kbd> <kbd>Shift</kbd></td><td>pause / hold for quarter speed</td></tr>
+    <tr><td><kbd>R</kbd></td><td>reset the drill</td></tr>
+    <tr><td><kbd>H</kbd></td><td>close this</td></tr>
+  </table>
+  <div class="hr"></div>
+  <div style="color:var(--ink-dim);font-size:11px">
+    The wheel and the lever bottom-left can be dragged with the mouse. Scroll to
+    zoom, drag the chart to pan, double-click to follow the boat again.
+  </div>
+</div>
+
+<div id="selftest"></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   §0  UNITS, MATH HELPERS
+   Everything internal is SI: metres, m/s, radians, newtons, kilograms.
+   Knots and degrees exist only at the display and scenario-authoring edges.
+   ========================================================================== */
+
+const KN   = 0.514444;                 // knots -> m/s
+const toKn = (ms)  => ms / KN;
+const RAD  = Math.PI / 180;
+const toDeg= (r)   => r / Math.PI * 180;
+const RHO_W = 1025;                    // seawater density  kg/m^3
+const RHO_A = 1.225;                   // air density       kg/m^3
+
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const sq    = (x) => x * x;
+const hypot = Math.hypot;
+
+// Wrap an angle to [-PI, PI). Used for every heading difference in the sim.
+function wrapPi(a) {
+  a = (a + Math.PI) % (2 * Math.PI);
+  if (a < 0) a += 2 * Math.PI;
+  return a - Math.PI;
+}
+// Wrap a compass bearing to [0, 360).
+const wrap360 = (d) => ((d % 360) + 360) % 360;
+
+/* Body frame <-> world frame.
+   Body:  +x forward (bow), +y to starboard.
+   World: +X east, +Y north.
+   Heading psi is a compass bearing in radians, clockwise from north. */
+function bodyToWorld(x, y, psi) {
+  const s = Math.sin(psi), c = Math.cos(psi);
+  return { x: x * s + y * c, y: x * c - y * s };
+}
+function worldToBody(X, Y, psi) {
+  const s = Math.sin(psi), c = Math.cos(psi);
+  return { x: X * s + Y * c, y: X * c - Y * s };
+}
+
+// Deterministic RNG so drills and the self-test are reproducible.
+function makeRng(seed) {
+  let s = seed >>> 0 || 1;
+  return function () {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s / 4294967296;
+  };
+}
+// Standard normal via Box-Muller, drawing from a supplied uniform source.
+function gauss(rng) {
+  let u = 0, v = 0;
+  while (u === 0) u = rng();
+  while (v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/* ==========================================================================
+   §1  THE BOATS
+
+   Five real production yachts from 27 to 44 feet. Their principal dimensions
+   are the published figures; everything else is DERIVED from them by scaling
+   laws anchored on the Beneteau First 40.1, which is the boat the seventeen
+   acceptance tests in §11 were tuned against.
+
+   That anchoring is deliberate and it is the reason to trust the other four.
+   Every derived quantity is written as `anchorValue * ratio`, where the ratio is
+   exactly 1.0 when fed the 40.1's own figures — so the validated boat comes out
+   bit-for-bit unchanged, and the others are displaced from a known-good point
+   rather than invented. Hand-authoring five sets of forty coefficients would
+   mean inventing two hundred numbers with no way to check most of them.
+
+   Per boat you can change: the published dimensions, the keel and rudder type,
+   the propeller, and the windage inputs (freeboard and mast height). Everything
+   else follows.
+   ========================================================================== */
+
+/* ---- shared: coefficient tables that belong to the water, not the boat ---- */
+
+/* Full-range foil coefficients. The tables run all the way to 90 degrees so
+   that ONE formula covers lift, stall and pure crossflow: at 90 degrees the
+   "foil" correctly degenerates into a bluff body with Cd about 1.3. No
+   branching, and no separate crossflow term for the keel and rudder. */
+const FOIL = {
+  rudder: {   // balanced spade, effective aspect ratio 3.4
+    a:  [0,   5,     10,   15,   18,   21,   25,   30,   35,   45,   60,   90  ],
+    cl: [0,   0.345, 0.69, 1.00, 1.18, 1.30, 1.12, 0.98, 0.90, 0.82, 0.66, 0   ],
+    cd: [0.020, 0.025, 0.045, 0.085, 0.115, 0.150, 0.28, 0.42, 0.56, 0.85, 1.13, 1.28],
+  },
+  keel: {     // fin keel, effective aspect ratio 2.05
+    a:  [0,   5,    10,   15,   20,   25,   35,   45,   60,   90  ],
+    cl: [0,   0.28, 0.56, 0.83, 1.05, 0.92, 0.80, 0.74, 0.60, 0   ],
+    cd: [0.018, 0.024, 0.048, 0.095, 0.165, 0.30, 0.58, 0.88, 1.16, 1.30],
+  },
+};
+
+/* How much of the propeller jet a given rudder angle deflects. A blade sitting
+   in a race stalls much later than one in clean water, hence the late peak. */
+const WASH_DEFL = {
+  a: [0, 10,    20,   25,   30,   35,   40  ],
+  f: [0, 0.175, 0.34, 0.42, 0.50, 0.55, 0.52],
+};
+
+const HELM = {
+  maxAngle: 35 * RAD,
+  maxRate:  25 * RAD,       // about 2.5 turns lock to lock in 2.8 s
+  tau:      0.15,
+
+  /* Wake fraction at the blade, GOING AHEAD ONLY.
+
+     Making way ahead, the rudder sits in the hull's boundary layer and the
+     water it sees has already been dragged along by the boat, so the inflow is
+     only about 80% of her speed through the water — and force goes as the
+     square of that, so the blade loses a third of its bite. Going ASTERN the
+     blade is the leading surface: the water arrives straight off the open sea,
+     undisturbed, and there is no wake deficit at all.
+
+     Leaving this out makes her turn ahead like a dinghy while feeling dead
+     astern. It is the correct way to set the asymmetry between the two, rather
+     than pushing the reversed-flow lift around. */
+  wakeAhead: 0.20,
+};
+
+/* Engine lever: continuous, with soft detents. Real docking lives entirely
+   between neutral and about a third of the lever, and notch-only control robs
+   you of that, so the lever is analogue and the keys step through it. */
+const ENGINE = {
+  idleRev: 0.293,           // 850 rpm idle / 2900 rpm max
+  neutralBand: 0.04,
+  detents: [-1.0, -0.45, -0.04, 0, 0.04, 0.45, 1.0],
+  gearDeadTime: 0.30,       // through neutral
+  gearSlamTime: 0.60,       // straight from ahead to astern or back
+  tau_att: 2.6,             // prop-flow attachment time constant
+
+  /* Speed at which prop walk has halved — 1.10 m/s, about 2.1 kn.
+
+     This is what makes the walk a LOW-SPEED effect. It is at full strength the
+     instant you engage astern from rest, is down to about half by two knots of
+     sternway, and a third by three. That fade is the other half of getting
+     reverse right: the walk hands over to the rudder as she gathers way, so you
+     have no steering at all at first and useful steering by two or three knots.
+     Set this too high and the walk stays at nearly full strength throughout,
+     cancels the rudder, and she becomes uncontrollable astern at every speed
+     rather than just at the start. */
+  u_ref_pw: 1.10,
+  attDepth: 0.35,           // how much of the walk the establishing flow kills
+};
+
+/* Thruster behaviour that is the same whatever the boat. Sizes are per boat. */
+const THRUSTER_COMMON = {
+  u_fade: 1.00,             // effectiveness halves by about 2 kn
+  tau_spin: 0.18,
+  reverseDead: 0.50,
+  T_run: 115, T_cool: 300,  // trips after ~2.5 min continuous, cools in ~5
+  resetBelow: 0.35,
+  sagAfter: 8.0, sagTo: 0.85,
+};
+
+/* Aerodynamic coefficients, shared. Areas and the centre of effort are per boat. */
+const AERO_COMMON = {
+  Cx: 0.75, Cy: 1.15, CyPeak: 0.12,
+  gust:  { tau: 12, sigma: 0.14, lo: 0.45, hi: 1.85 },
+  veer:  { tau: 25, sigma: 8 * RAD },
+};
+
+/* ---- mooring lines and contact: rope and rubber, not boat-specific -------- */
+const LINE = {
+  EA: 90000,                // axial stiffness of 14 mm nylon, N per unit strain
+  zeta: 0.55,               // damping ratio: a small snub, not a bungee
+  breakLoad: 44000,
+  cleatPullout: 12000,      // a small pontoon cleat lets go; a bollard does not
+  handHaul: 900, winchHaul: 2500, handHold: 700,
+  rateFree: 0.35, ratePayout: 0.60,
+  // What "snug" means when making fast alongside: enough to hold her against
+  // her fenders, nowhere near enough to strain anything.
+  snugTension: 450,
+  // Seconds spent tending them before you walk away. In calm water this brings
+  // her from about 14 degrees askew down to under 2; much beyond 90 s nothing
+  // more happens, because she has settled.
+  snugWindow: 90,
+  // How far you can throw. 6 m is a comfortable underarm lob of a coiled
+  // mooring line; 9 m is a good throw. Beyond that you are kidding yourself.
+  rangeCertain: 6.0, rangeMax: 9.0,
+  throwArc: 100 * RAD,
+  minLength: 0.5,
+};
+
+const CONTACT = {
+  k_fender: 250000, k_hull: 2200000, k_piling: 1500000,
+  rest_fender: 0.10, rest_hull: 0.18,
+  mu_fender: 0.45, mu_hull: 0.25,
+  slop: 0.010, baumgarte: 0.20, maxSep: 0.6, iters: 6,
+  // The same knock costs this much more when it lands on bare hull rather than
+  // on a fender, and again if it lands on somebody else's boat.
+  bareMul: 2.5, neighbourMul: 1.6,
+};
+
+/* ---- hull outlines, normalised to +-1 of half-length and half-beam --------
+   Two forms, because the difference is not cosmetic: a narrow-sterned classic
+   touches on her quarter where a beamy modern hull touches flat along the
+   after third, and at a finger berth that is the whole question. */
+const HULL_FORMS = {
+  modern: [
+    [1.000, 0.000], [0.958, 0.282], [0.824, 0.590], [0.605, 0.862],
+    [0.336, 0.974], [0.000, 1.000], [-0.336, 0.974], [-0.706, 0.882],
+    [-0.941, 0.759], [-1.000, 0.677],
+  ],
+  classic: [
+    [1.000, 0.000], [0.965, 0.215], [0.850, 0.495], [0.640, 0.780],
+    [0.360, 0.940], [0.050, 1.000], [-0.280, 0.960], [-0.620, 0.820],
+    [-0.880, 0.600], [-1.000, 0.430],
+  ],
+};
+
+/* ---- propeller and drivetrain types --------------------------------------
+   Factors are relative to that drive's own ahead thrust, so they compose with
+   whatever engine the boat has. The three that matter for handling are the
+   astern bite, the prop walk, and how much of the jet reaches the rudder. */
+const DRIVE_TYPES = {
+  shaft: {
+    label: "Shaft + 3-blade fixed",
+    aheadF: 1.000, asternF: 0.680, uztAF: 1.000, uztRF: 0.290,
+    kpwA: 0.45, kpwF: 0.045, kwash: 0.35,
+    xpropF: -0.3770, X_pd: 42, fold: false,
+  },
+  shaft2: {
+    label: "Shaft + 2-blade fixed",
+    aheadF: 0.940, asternF: 0.600, uztAF: 1.000, uztRF: 0.285,
+    kpwA: 0.36, kpwF: 0.036, kwash: 0.30,
+    xpropF: -0.3770, X_pd: 26, fold: false,
+  },
+  saildrive: {
+    label: "Saildrive + folding 2-blade",
+    aheadF: 0.846, asternF: 0.466, uztAF: 0.920, uztRF: 0.261,
+    kpwA: 0.20, kpwF: 0.020, kwash: 0.15,
+    // The leg sits well forward under the engine, so the jet mostly misses the
+    // blade — which is why a saildrive kicks so much less on a burst ahead.
+    xpropF: -0.2705, X_pd: 6, fold: true,
+  },
+};
+
+/* Keel and rudder character. keelF scales lateral area; rudF scales blade area.
+   A skeg is modelled as a separate non-lifting panel at the rudder station
+   (see buildBoat): its real contribution is directional stability and yaw
+   damping, not extra steering force, which is why skeg boats track and back so
+   much more predictably without actually steering harder. */
+const KEEL_TYPES = {
+  deepfin:  { keelF: 1.00, xF: -0.0287, label: "deep fin" },
+  fin:      { keelF: 1.12, xF: -0.0287, label: "fin" },
+  longfin:  { keelF: 1.55, xF: -0.0350, label: "long fin" },
+  longkeel: { keelF: 2.60, xF: -0.0200, label: "long keel" },
+};
+const RUDDER_TYPES = {
+  spade: { rudF: 1.00, xF: 1.00, skeg: 0.00, label: "spade" },
+  skeg:  { rudF: 1.00, xF: 0.96, skeg: 0.30, label: "skeg-hung" },
+};
+
+/* ==========================================================================
+   The five boats. Principal dimensions are published figures.
+   ========================================================================== */
+const BOAT_DEFS = [
+  {
+    id: "catalina27", name: "Catalina 27", years: "1971–1991",
+    note: "Around 6,600 built. Light, shallow and short: she blows about badly, carries almost no way, and the small two-blade gives her very little to walk with.",
+    loa: 8.18, lwl: 6.65, beam: 2.69, draft: 1.22, disp: 3100,
+    freeboard: 0.90, mastHeight: 10.7, sprayhood: false, copBias: -0.10,
+    hp: 18, propD: 0.33,
+    keel: "fin", rudder: "spade", form: "classic",
+    drives: ["shaft2"], thrusters: false,
+  },
+  {
+    id: "contessa32", name: "Contessa 32", years: "1971–present",
+    note: "David Sadler's design, made famous by the 1979 Fastnet. Narrow, deep, long fin and a skeg: she tracks like a train and backs more honestly than anything else here.",
+    loa: 9.75, lwl: 7.32, beam: 2.90, draft: 1.68, disp: 4300,
+    freeboard: 0.88, mastHeight: 12.5, sprayhood: false, copBias: -0.25,
+    hp: 20, propD: 0.38,
+    keel: "longfin", rudder: "skeg", form: "classic",
+    drives: ["shaft3", "shaft2"], thrusters: false,
+  },
+  {
+    id: "hr34", name: "Hallberg-Rassy 34", years: "1990–1998",
+    note: "Olle Enderlein design, heavy and deep-bodied. Takes real distance to stop, but the big three-blade walks her stern hard and the skeg keeps her straight.",
+    loa: 10.40, lwl: 8.60, beam: 3.42, draft: 1.70, disp: 6200,
+    freeboard: 1.15, mastHeight: 14.0, sprayhood: true, copBias: 0.00,
+    hp: 38, propD: 0.44,
+    keel: "fin", rudder: "skeg", form: "classic",
+    drives: ["shaft3"], thrusters: false,
+  },
+  {
+    id: "first401", name: "Beneteau First 40.1", years: "1986–1990",
+    note: "The boat this simulator was tuned and validated against. Quick and responsive, but the rig is well forward of her keel so the bow blows off hard.",
+    loa: 12.20, lwl: 11.00, beam: 3.90, draft: 2.20, disp: 8200,
+    freeboard: 1.24, mastHeight: 17.5, sprayhood: true, copBias: 0.00,
+    hp: 40, propD: 0.46,
+    keel: "deepfin", rudder: "spade", form: "modern",
+    drives: ["shaft3", "saildrive"], thrusters: true,
+    anchor: true,
+  },
+  {
+    id: "so44i", name: "Jeanneau Sun Odyssey 44i", years: "2008–2012",
+    note: "Marc Lombard design, and the hardest boat here. Enormous windage biased well forward, and the folding prop backs badly and barely walks — in a breeze she cannot back against the wind at all.",
+    loa: 13.49, lwl: 11.60, beam: 4.25, draft: 2.10, disp: 9800,
+    freeboard: 1.55, mastHeight: 18.3, sprayhood: true, copBias: 0.35,
+    hp: 54, propD: 0.46,
+    keel: "fin", rudder: "spade", form: "modern",
+    drives: ["saildrive", "shaft3"], thrusters: true,
+  },
+];
+
+/* The 40.1's authored figures, and the validated numbers they must reproduce.
+   Change nothing here without re-running ?selftest=1. */
+const ANCHOR = BOAT_DEFS.find((d) => d.anchor);
+const REF = {
+  m_xF: 1.0610,                       // x displacement
+  I_zK: 0.245, I_zAdd: 1.400,         // radius of gyration, added inertia
+  m_yAdd: 1.146,                      // added sway mass at the anchor's area ratio
+  hullLat: 7.10, keelA: 2.35, rudA: 1.10,
+  panelShare: [2.50 / 7.10, 2.40 / 7.10, 2.20 / 7.10],
+  panelX: [3.70, 0.90, -2.50], panelCdc: [0.85, 0.85, 0.80],
+  X_u: 200, X_uu: 34, X_res: 3.80, X_resExp: 4.6, k_astern: 1.70,
+  Y_v: 400, N_r: 4000, N_rr: 200000,
+  A_lat: 29.0, A_frontal: 12.5, z_cop: 4.6,
+  windShare: [0.40, 0.35, 0.25], windX: [3.50, 0.50, -2.60],
+  T_ahead: 5200, u_zt: 10.0,
+  bowThr: 650, sternThr: 550, bowThrX: 4.60, sternThrX: -4.40,
+  gm: 1.30, fRevRudder: 0.95, fRevKeel: 0.50,
+  fenders: [2.60, 0.90, -1.00, -3.10],
+  cleats: {
+    BOW:   { name: "bow",          x: +5.70, y:  0.00 },
+    SPR_P: { name: "spring port",  x: +0.60, y: -1.85 },
+    SPR_S: { name: "spring stbd",  x: +0.60, y: +1.85 },
+    QTR_P: { name: "quarter port", x: -5.20, y: -1.50 },
+    QTR_S: { name: "quarter stbd", x: -5.20, y: +1.50 },
+    STERN: { name: "stern",        x: -5.90, y:  0.00 },
+  },
+  keelFoot: { x0: -1.10, x1: +0.40 },
+  rudderFoot: { x0: -5.45, x1: -4.85, depthF: 1.90 / 2.20 },
+  canoeF: { modern: 0.159, classic: 0.175 },   // canoe-body draft / beam
+  wetted: (d) => 2.6 * Math.sqrt((d.disp / 1025) * d.lwl),
+  windF: (d) => d.loa * d.freeboard * 0.95 + d.loa * d.beam * 0.075
+              + d.mastHeight * 0.50 + 3.6 * (d.loa / 12.20)
+              + (d.sprayhood ? 2.0 * (d.loa / 12.20) : 0),
+  frontF: (d) => d.beam * d.freeboard + d.mastHeight * 0.25,
+};
+
+/* Derive a complete parameter set from published dimensions. */
+function buildBoat(d) {
+  const a = ANCHOR;
+  const sL = d.loa / a.loa, sB = d.beam / a.beam, sD = d.disp / a.disp;
+  const kt = KEEL_TYPES[d.keel], rt = RUDDER_TYPES[d.rudder];
+  const ktA = KEEL_TYPES[a.keel], rtA = RUDDER_TYPES[a.rudder];
+
+  // ---- underwater lateral area: the driver for sway, yaw and drift ----
+  const canoe  = d.beam * REF.canoeF[d.form];
+  const canoeA = a.beam * REF.canoeF[a.form];
+  const hullLat = REF.hullLat * (d.lwl * canoe) / (a.lwl * canoeA);
+  const keelA   = REF.keelA * (d.draft * d.loa) / (a.draft * a.loa) * (kt.keelF / ktA.keelF);
+  const rudA    = REF.rudA * sL * sL * (rt.rudF / rtA.rudF);
+  const skegA   = REF.rudA * sL * sL * rt.skeg;
+  const latTot  = hullLat + keelA + rudA + skegA;
+  const latTotA = REF.hullLat + REF.keelA + REF.rudA + rtA.skeg * REF.rudA;
+  const latRatio = (latTot / d.disp) / (latTotA / a.disp);   // area per tonne
+
+  // ---- mass, added mass, inertia ----
+  const BOATp = {
+    id: d.id, name: d.name, years: d.years, note: d.note,
+    loa: d.loa, lwl: d.lwl, beam: d.beam, draft: d.draft, disp: d.disp,
+    bow: +d.loa / 2 * 0.9754, transom: -d.loa / 2 * 0.9754,
+    m_x: d.disp * REF.m_xF,
+    m_y: d.disp * (1 + REF.m_yAdd * latRatio),
+    I_z: d.disp * sq(REF.I_zK * d.loa) * REF.I_zAdd,
+    x_rud: -0.4262 * d.loa * rt.xF,
+    gm: REF.gm * sB,
+    keelLabel: kt.label, rudderLabel: rt.label,
+  };
+
+  // ---- underwater panels ----
+  const PANELSp = [];
+  for (let i = 0; i < 3; i++) {
+    PANELSp.push({
+      id: "P" + (i + 1), name: ["fore hull", "mid hull", "aft hull"][i],
+      x: REF.panelX[i] * sL, type: "cross",
+      A: hullLat * REF.panelShare[i], cdc: REF.panelCdc[i],
+    });
+  }
+  PANELSp.push({
+    id: "P4", name: "keel", x: kt.xF * d.loa, type: "foil",
+    A: keelA, foil: "keel", fRev: REF.fRevKeel,
+  });
+  PANELSp.push({
+    id: "P5", name: "rudder", x: BOATp.x_rud, type: "foil",
+    A: rudA, foil: "rudder", fRev: REF.fRevRudder,
+  });
+  if (skegA > 0) {
+    // Crossflow, not lifting: a skeg holds her straight, it does not steer her.
+    PANELSp.push({
+      id: "P6", name: "skeg", x: BOATp.x_rud * 0.92, type: "cross",
+      A: skegA, cdc: 0.90,
+    });
+  }
+
+  // ---- resistance ----
+  const HULLp = {
+    // Sets how long she carries her way. Scaled so the glide stays a similar
+    // number of BOAT LENGTHS rather than a similar number of metres.
+    X_u: REF.X_u * sD / sL,
+    X_uu: REF.X_uu * REF.wetted(d) / REF.wetted(a),
+    // Wave making, and therefore hull speed: R ∝ disp / lwl^2.3 at a given
+    // Froude number, which falls straight out of R = X_res*u^4.6.
+    X_res: REF.X_res * sD * Math.pow(a.lwl / d.lwl, 2.3),
+    X_resExp: REF.X_resExp,
+    k_astern: REF.k_astern,
+    Y_v: REF.Y_v * (latTot / latTotA),
+    N_r: REF.N_r * (latTot / latTotA) * sL * sL,
+    N_rr: REF.N_rr * (latTot / latTotA) * sL * sL,
+  };
+
+  // ---- propulsion. Actuator disk: T goes as (power * diameter)^(2/3). ----
+  const Tbase = REF.T_ahead * Math.pow(d.hp / a.hp, 2 / 3)
+                            * Math.pow(d.propD / a.propD, 2 / 3);
+  const uztBase = REF.u_zt * Math.sqrt(d.lwl / a.lwl);
+  const DRIVESp = {};
+  for (const key of d.drives) {
+    const t = DRIVE_TYPES[key === "shaft3" ? "shaft" : key];
+    const name = key === "shaft3" ? "shaft" : key;
+    DRIVESp[name] = {
+      label: t.label,
+      D: d.propD, x_prop: t.xpropF * d.loa,
+      T_ahead: Tbase * t.aheadF,
+      T_astern: Tbase * t.aheadF * t.asternF,
+      u_zt_ahead: uztBase * t.uztAF,
+      u_zt_astern: uztBase * t.uztAF * t.uztRF / t.uztAF,
+      // A folding propeller has to open before it does anything: nearly a
+      // second of nothing, then a slow bite. It is what catches people out.
+      asternRamp: t.fold
+        ? (s) => clamp((s - 0.90) / 1.40, 0, 1)
+        : (s) => clamp(s / 0.45, 0, 1),
+      k_pw_astern: t.kpwA, k_pw_ahead: t.kpwF,
+      k_wash: t.kwash,
+      X_pd: t.X_pd * sL * sL,
+      tau_n: 0.70,
+      folding: t.fold,
+    };
+  }
+
+  // ---- thrusters ----
+  const THRUSTERSp = Object.assign({}, THRUSTER_COMMON, {
+    canFit: !!d.thrusters,
+    bow:   { T: REF.bowThr * sD,    x: +0.3770 * d.loa },
+    stern: { T: REF.sternThr * sD,  x: -0.3607 * d.loa },
+  });
+
+  // ---- windage. A sailing yacht is mostly rig, and the rig is forward. ----
+  const A_lat = REF.A_lat * REF.windF(d) / REF.windF(a);
+  const WIND_PANELSp = REF.windShare.map((share, i) => ({
+    name: ["fore", "mid", "aft"][i],
+    share, A: A_lat * share,
+    x: REF.windX[i] * sL + d.copBias,
+  }));
+  const WINDAGEp = Object.assign({}, AERO_COMMON, {
+    A_lat,
+    A_frontal: REF.A_frontal * REF.frontF(d) / REF.frontF(a),
+    z_cop: REF.z_cop * d.mastHeight / a.mastHeight,
+  });
+
+  // ---- deck fittings and hull outline ----
+  const CLEATSp = {};
+  for (const [k, c] of Object.entries(REF.cleats)) {
+    CLEATSp[k] = { name: c.name, x: c.x * sL, y: c.y * sB };
+  }
+  const halfL = BOATp.bow, halfB = d.beam / 2;
+  const half = HULL_FORMS[d.form].map(([x, y]) => [x * halfL, y * halfB]);
+  const HULL_POLYp = half.slice();
+  for (let i = half.length - 1; i >= 0; i--) {
+    if (half[i][1] > 0.001) HULL_POLYp.push([half[i][0], -half[i][1]]);
+  }
+
+  return {
+    def: d,
+    BOAT: BOATp, PANELS: PANELSp, HULL: HULLp, DRIVES: DRIVESp,
+    THRUSTERS: THRUSTERSp, WIND_PANELS: WIND_PANELSp, WINDAGE: WINDAGEp,
+    CLEATS: CLEATSp,
+    HULL_POLY: HULL_POLYp,
+    HULL_RADIUS: Math.max(...HULL_POLYp.map(([x, y]) => hypot(x, y))),
+    FENDERS: REF.fenders.map((x) => x * sL),
+    KEEL_FOOT: { x0: REF.keelFoot.x0 * sL, x1: REF.keelFoot.x1 * sL, depth: d.draft },
+    RUDDER_FOOT: { x0: REF.rudderFoot.x0 * sL, x1: REF.rudderFoot.x1 * sL,
+                   depth: d.draft * REF.rudderFoot.depthF },
+    driveKeys: d.drives.map((k) => (k === "shaft3" ? "shaft" : k)),
+  };
+}
+
+const BOATS = BOAT_DEFS.map(buildBoat);
+const ANCHOR_BOAT = BOATS.findIndex((b) => b.def.anchor);
+
+/* The active boat. These are the names the whole physics layer reads, so
+   selecting a boat is a matter of repointing them — no call site knows or
+   cares that there is more than one boat. */
+let boatIndex = -1;
+let BOAT, PANELS, HULL, DRIVES, THRUSTERS, WIND_PANELS, WINDAGE, CLEATS,
+    HULL_POLY, HULL_RADIUS, FENDERS, KEEL_FOOT, RUDDER_FOOT, DRIVE_KEYS;
+
+function selectBoat(i) {
+  const b = BOATS[clamp(i, 0, BOATS.length - 1)];
+  boatIndex = BOATS.indexOf(b);
+  BOAT = b.BOAT; PANELS = b.PANELS; HULL = b.HULL; DRIVES = b.DRIVES;
+  THRUSTERS = b.THRUSTERS; WIND_PANELS = b.WIND_PANELS; WINDAGE = b.WINDAGE;
+  CLEATS = b.CLEATS; HULL_POLY = b.HULL_POLY; HULL_RADIUS = b.HULL_RADIUS;
+  FENDERS = b.FENDERS; KEEL_FOOT = b.KEEL_FOOT; RUDDER_FOOT = b.RUDDER_FOOT;
+  DRIVE_KEYS = b.driveKeys;
+  return b;
+}
+selectBoat(ANCHOR_BOAT);
+
+/* Neighbours in the berths are drawn and collided with a fixed modern outline,
+   deliberately independent of whichever boat you are driving — otherwise the
+   whole marina would change shape when you changed boat. */
+function makeHullPoly(loa, beam) {
+  const half = HULL_FORMS.modern.map(([x, y]) => [x * loa / 2 * 0.9754, y * beam / 2]);
+  const out = half.slice();
+  for (let i = half.length - 1; i >= 0; i--) {
+    if (half[i][1] > 0.001) out.push([half[i][0], -half[i][1]]);
+  }
+  return out;
+}
+
+/* ==========================================================================
+   §2  THE MARINA
+   All geometry is plain data in world metres (+X east, +Y north) so that a
+   drill is nothing more than this world plus a start state.
+
+   Hard geometry is convex polygons (hittable). Bollards are numbered points.
+   Shelter zones knock the wind down in the lee of buildings; current zones
+   scale the tide so the stream runs hard in the approach and barely at all
+   between the pontoons.
+   ========================================================================== */
+
+const WORLD = {
+  // Extent of navigable water, for the camera and the background wash.
+  bounds: { x0: -20, y0: -70, x1: 240, y1: 180 },
+
+  /* ---- land, quays and breakwaters: convex polygons, all solid ---- */
+  land: [
+    // North quay. Its southern edge at y=158 is the Med-moor wall.
+    { name: "north quay", pts: [[-20,158],[240,158],[240,180],[-20,180]] },
+    // West shore.
+    { name: "west shore", pts: [[-20,34],[16,34],[16,158],[-20,158]] },
+    // Breakwater arms forming the entrance gap between x=130 and x=156.
+    { name: "west breakwater", pts: [[16,14],[130,14],[130,24],[16,24]] },
+    { name: "east breakwater", pts: [[156,-4],[176,-4],[176,24],[156,24]] },
+    // South-east shore, outside the entrance.
+    { name: "east shore", pts: [[176,-70],[240,-70],[240,24],[176,24]] },
+  ],
+
+  /* ---- buildings: solid, and they throw a wind shadow ---- */
+  buildings: [
+    { name: "boat shed",   pts: [[-4,96],[14,96],[14,140],[-4,140]], height: 11 },
+    { name: "clubhouse",   pts: [[54,160],[92,160],[92,176],[54,176]], height: 8 },
+    { name: "chandlery",   pts: [[120,160],[146,160],[146,174],[120,174]], height: 6 },
+  ],
+
+  /* ---- pontoons: rectangles, given as centre-line + width for brevity ----
+     Spine A carries fingers pointing SOUTH; spine B carries fingers pointing
+     NORTH. Finger tips are 20 m apart, which is the fairway you manoeuvre in:
+     about 1.6 boat lengths, tight but workable, exactly like the real thing. */
+  pontoons: [],   // filled by buildMarina()
+  bollards: [],   // filled by buildMarina()
+  pilings:  [
+    { x: 128, y: 30, r: 0.28 }, { x: 158, y: 30, r: 0.28 },
+    { x: 128, y: 8,  r: 0.28 }, { x: 158, y: 8,  r: 0.28 },
+    { x: 134, y: 118, r: 0.22 },
+  ],
+
+  /* ---- shoal water: keel touches below the stated depth ---- */
+  shoals: [
+    { name: "spit", x: 118, y: -18, r: 22, depth: 1.6 },
+    { name: "silted corner", x: 24, y: 44, r: 16, depth: 1.9 },
+  ],
+
+  /* ---- wind shadow: factor applies when the boat is downwind of the zone --- */
+  shelterZones: [
+    { x: 5,   y: 118, r: 26, factor: 0.35, source: "boat shed" },
+    { x: 73,  y: 168, r: 24, factor: 0.55, source: "clubhouse" },
+    { x: 133, y: 167, r: 18, factor: 0.6,  source: "chandlery" },
+  ],
+
+  /* ---- tidal stream, authored as zones and then baked into a smooth grid.
+     `dir` is the compass bearing the water flows TOWARDS on the flood; the ebb
+     is the same field negated. `f` is the strength relative to the rate on the
+     slider.
+
+     The stream runs hard across the approach and squeezes through the entrance
+     gap, which is the classic "sets you sideways across the entrance". Just
+     inside, behind the breakwater head, it runs BACKWARDS in an eddy. That
+     shear is the single most valuable feature in the whole field: the bow
+     enters slack water while the stern is still in the stream, and the panel
+     model turns that into a real and correct yaw moment. It is exactly the
+     moment a marina entrance bites you. ---- */
+  currentZones: [
+    { name: "approach",     x0:  80, y0: -70, x1: 240, y1:  12, f: 1.00, dir:  90 },
+    { name: "entrance gap", x0: 126, y0:  12, x1: 158, y1:  30, f: 0.70, dir:  80 },
+    { name: "breakwater eddy", x0: 108, y0: 24, x1: 142, y1: 48, f: 0.35, dir: 262 },
+    { name: "n-s fairway",  x0: 126, y0:  30, x1: 178, y1: 158, f: 0.15, dir:   0 },
+    { name: "basin",        x0:  16, y0: 130, x1: 126, y1: 158, f: 0.10, dir: 270 },
+    { name: "fairway 1",    x0:  16, y0:  96, x1: 126, y1: 130, f: 0.05, dir: 270 },
+    { name: "berths",       x0:  16, y0:  34, x1: 126, y1:  96, f: 0.03, dir: 270 },
+  ],
+  currentDefault: { f: 0.85, dir: 90 },   // open water outside every named zone
+
+  /* ---- other yachts occupying berths: solid, and they add windage shadow --- */
+  mooredBoats: [],  // filled by buildMarina()
+};
+
+/* Build the repetitive parts of the marina: pontoon spines, their fingers,
+   the numbered bollards, and the neighbours already tied up in the berths. */
+function buildMarina() {
+  const P = WORLD.pontoons, B = WORLD.bollards, M = WORLD.mooredBoats;
+  const rect = (name, x0, y0, x1, y1) => P.push({ name, pts: [[x0,y0],[x1,y0],[x1,y1],[x0,y1]] });
+
+  let n = 1;                                  // running bollard number
+  const bol = (x, y, kind) => { B.push({ n: n++, x, y, kind }); };
+
+  // ---- Pontoon A: spine at y 127.0-129.5, fingers pointing south to y=116 --
+  rect("A spine", 24, 127, 126, 129.5);
+  const fingersA = [32, 38, 44, 50, 56, 62, 68, 74, 80, 86];
+  for (const fx of fingersA) rect("A finger", fx - 0.6, 116, fx + 0.6, 127);
+  // A bollard at the outer end of every finger, then one at the root. The
+  // outer ones are what you reach for on the way in; the roots hold you back.
+  for (const fx of fingersA) bol(fx, 116.6, "finger-tip");
+  for (const fx of fingersA) bol(fx, 126.4, "finger-root");
+
+  // ---- Hammerhead on the east end of pontoon A: the visitors' berth --------
+  rect("hammerhead", 126, 122, 140, 129.5);
+  bol(139.2, 128.4, "hammerhead");
+  bol(139.2, 125.6, "hammerhead");
+  bol(139.2, 122.8, "hammerhead");
+  bol(133, 121.2, "hammerhead");
+  bol(128, 121.2, "hammerhead");
+
+  // ---- Pontoon B: spine at y 82.5-85, fingers pointing north to y=96 -------
+  rect("B spine", 24, 82.5, 126, 85);
+  const fingersB = [32, 38, 44, 50, 56, 62, 68, 74, 80, 86];
+  for (const fx of fingersB) rect("B finger", fx - 0.6, 85, fx + 0.6, 96);
+  for (const fx of fingersB) bol(fx, 95.4, "finger-tip");
+
+  // ---- Med-moor wall along the north quay ---------------------------------
+  for (let x = 30; x <= 118; x += 11) bol(x, 157.2, "wall");
+
+  // ---- Fuel berth, on the west side of the north-south fairway ------------
+  rect("fuel pontoon", 126, 44, 128.5, 66);
+  bol(127.2, 64.5, "fuel");
+  bol(127.2, 55.0, "fuel");
+  bol(127.2, 45.5, "fuel");
+
+  // ---- Neighbours already berthed. Leave gaps to aim at. ------------------
+  // Berth centres between fingers on pontoon A, bow-in (pointing north).
+  // Berths 47, 65 and 77 are left free — those are the ones you aim at.
+  const occupiedA = [35, 41, 53, 59, 71, 83];
+  for (const x of occupiedA) M.push({ x, y: 121.8, psi: 0 * RAD, loa: 10.0, beam: 3.5 });
+  // Pontoon B, stern-in (pointing south). 41, 53 and 71 left free.
+  const occupiedB = [35, 47, 59, 65, 77, 83];
+  for (const x of occupiedB) M.push({ x, y: 90.6, psi: 180 * RAD, loa: 10.0, beam: 3.7 });
+  // A big motor yacht lying along the hammerhead's south face, which makes the
+  // visitors' berth on the outer face a genuinely tight fit to get into.
+  M.push({ x: 132, y: 119.6, psi: 90 * RAD, loa: 14.5, beam: 4.4 });
+}
+buildMarina();
+
+/* Which numbered bollard is nearest a given world point (used by the throw). */
+function nearestBollard(X, Y, maxDist) {
+  let best = null, bd = maxDist == null ? Infinity : maxDist;
+  for (const b of WORLD.bollards) {
+    const d = hypot(b.x - X, b.y - Y);
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best ? { bollard: best, dist: bd } : null;
+}
+function bollardByNumber(n) {
+  return WORLD.bollards.find((b) => b.n === n) || null;
+}
+
+/* Depth at a point: deep everywhere except the charted shoals, which shelve
+   smoothly towards their centre so you feel the edge before you stop dead. */
+function depthAt(X, Y) {
+  let d = 6.0;
+  for (const s of WORLD.shoals) {
+    const t = hypot(X - s.x, Y - s.y) / s.r;
+    if (t < 1) d = Math.min(d, lerp(s.depth, 6.0, t * t));
+  }
+  return d;
+}
+
+/* ==========================================================================
+   §3  THE WATER — tidal stream field
+
+   A uniform current exerts NO FORCE on a free-floating boat. None. It enters
+   the physics at exactly one place: the water-relative velocity fed to the
+   hydrodynamic panels. See §5 for the full accounting. This section only
+   answers "how fast is the water moving here, and which way".
+
+   The field is baked to a grid at load and blurred, rather than evaluated from
+   the zone rectangles directly. Zone edges would make the panel model twitch
+   as the boat crossed a boundary; a blurred grid is smoother, cheaper to
+   sample, and easier to author.
+   ========================================================================== */
+
+const TIDE_GRID = (() => {
+  const cell = 2.0, b = WORLD.bounds;
+  const w = Math.ceil((b.x1 - b.x0) / cell) + 1;
+  const h = Math.ceil((b.y1 - b.y0) / cell) + 1;
+  let vx = new Float32Array(w * h), vy = new Float32Array(w * h);
+
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      const X = b.x0 + i * cell, Y = b.y0 + j * cell;
+      let z = WORLD.currentDefault;
+      // Later zones win, so the list reads coarse-to-fine.
+      for (const c of WORLD.currentZones) {
+        if (X >= c.x0 && X <= c.x1 && Y >= c.y0 && Y <= c.y1) z = c;
+      }
+      const dir = z.dir * RAD;
+      vx[j * w + i] = z.f * Math.sin(dir);   // bearing -> world vector
+      vy[j * w + i] = z.f * Math.cos(dir);
+    }
+  }
+  // Blur, so the boat never crosses a velocity step.
+  for (let pass = 0; pass < 4; pass++) {
+    const ox = vx, oy = vy;
+    vx = new Float32Array(w * h); vy = new Float32Array(w * h);
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        let sx = 0, sy = 0, n = 0;
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= w || jj >= h) continue;
+            sx += ox[jj * w + ii]; sy += oy[jj * w + ii]; n++;
+          }
+        }
+        vx[j * w + i] = sx / n; vy[j * w + i] = sy / n;
+      }
+    }
+  }
+  return { cell, x0: b.x0, y0: b.y0, w, h, vx, vy };
+})();
+
+/* Signed tide amplitude: +1 at peak flood, -1 at peak ebb. */
+const tideAmp = (phase) => Math.sin(2 * Math.PI * phase);
+
+/* Water velocity in world coordinates at a point. `rate` is the signed rate in
+   m/s from the scenario or the slider (negative = ebb). */
+function currentAt(X, Y, rate) {
+  const g = TIDE_GRID;
+  const fx = clamp((X - g.x0) / g.cell, 0, g.w - 1.001);
+  const fy = clamp((Y - g.y0) / g.cell, 0, g.h - 1.001);
+  const i = fx | 0, j = fy | 0, tx = fx - i, ty = fy - j;
+  const i00 = j * g.w + i, i10 = i00 + 1, i01 = i00 + g.w, i11 = i01 + 1;
+  const bl = (a) => (a[i00] * (1 - tx) + a[i10] * tx) * (1 - ty)
+                  + (a[i01] * (1 - tx) + a[i11] * tx) * ty;
+  return { x: bl(g.vx) * rate, y: bl(g.vy) * rate };
+}
+
+/* ==========================================================================
+   §4  THE AIR — gusts, veer and wind shadow
+   ========================================================================== */
+
+/* Ornstein-Uhlenbeck: a gust process that wanders and returns, rather than
+   white noise (too twitchy) or a sine (too predictable). Two of them: one on
+   speed, one on direction. The direction one is what makes her sail about. */
+function stepWind(S, env, dt, rng) {
+  const gs = WINDAGE.gust, vr = WINDAGE.veer;
+  const gain = env.gustiness;
+  const sg = gs.sigma * gain, sv = vr.sigma * gain;
+  S.gustG += -(S.gustG / gs.tau) * dt + sg * Math.sqrt(2 * dt / gs.tau) * gauss(rng);
+  S.veer  += -(S.veer  / vr.tau) * dt + sv * Math.sqrt(2 * dt / vr.tau) * gauss(rng);
+  S.gustG = clamp(S.gustG, -0.9, 1.2);
+  S.veer  = clamp(S.veer, -50 * RAD, 50 * RAD);
+}
+
+/* True wind as a world vector: the direction the air is TRAVELLING.
+   env.windDir is the direction it blows FROM, as a compass bearing. */
+function trueWind(S, env) {
+  const spd = env.windSpeed * clamp(1 + S.gustG, WINDAGE.gust.lo, WINDAGE.gust.hi);
+  // Real gusts veer, so bias the direction slightly during one.
+  const dir = env.windDir + S.veer + clamp(S.gustG, 0, 1) * 4 * RAD;
+  return { x: -spd * Math.sin(dir), y: -spd * Math.cos(dir), spd, dir };
+}
+
+/* Wind shadow. Each sheltering object knocks the wind down in a wake that
+   extends downwind, spreads as it goes, and fades with distance.
+
+   The reason this is sampled per wind panel rather than once for the boat: with
+   the bow tucked behind a shed and the stern still in clear air, the forward
+   panel is shaded and the after one is not, which produces a genuine yaw
+   moment that shoves your stern out. Every sailor knows that effect from a
+   marina entrance, and here it costs nothing to have. */
+function shelterAt(X, Y, windVec) {
+  const spd = hypot(windVec.x, windVec.y);
+  if (spd < 0.05) return 1;
+  const ex = windVec.x / spd, ey = windVec.y / spd;     // direction air travels
+  let factor = 1;
+  for (const z of WORLD.shelterZones) {
+    const dx = X - z.x, dy = Y - z.y;
+    const s = dx * ex + dy * ey;                        // downwind distance
+    if (s <= 0) continue;                               // upwind of it: unaffected
+    const Lwake = z.r * 4;
+    if (s > Lwake) continue;
+    const t = Math.abs(-dx * ey + dy * ex);             // crosswind offset
+    const halfW = z.r * 0.8 + 0.12 * s;
+    if (t > halfW) continue;
+    const edge = clamp((t / halfW - 0.55) / 0.45, 0, 1);
+    const red = z.factor * (1 - s / Lwake) * (1 - edge * edge * (3 - 2 * edge));
+    factor *= (1 - red);
+  }
+  return clamp(factor, 0.15, 1);
+}
+
+/* ==========================================================================
+   §5  FORCES
+
+   Everything hydrodynamic uses velocity RELATIVE TO THE WATER.
+   Lines, contacts, wind and position integration use velocity relative to the
+   GROUND. That asymmetry is the whole game:
+
+     - A boat DRIFTING in a 2 kn stream feels nothing at all, and translates
+       with the water like a piece of flotsam.
+     - A boat TIED UP in the same 2 kn stream feels the full five and a half
+       kilonewtons of side force, taken entirely by her lines and fenders.
+
+   Get both of those right and this section is right. Tests T1 and T15.
+   ========================================================================== */
+
+// Linear interpolation on a coefficient table indexed in degrees.
+function tableAt(xs, ys, x) {
+  if (x <= xs[0]) return ys[0];
+  const last = xs.length - 1;
+  if (x >= xs[last]) return ys[last];
+  let i = 1;
+  while (xs[i] < x) i++;
+  const t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+  return lerp(ys[i - 1], ys[i], t);
+}
+
+/* Foil coefficients over the full 360 degrees of angle of attack.
+
+   Beyond 90 degrees the foil is running trailing-edge-first. Lift both drops
+   sharply (a reversed foil separates almost at once) AND changes sense, which
+   is precisely why she is directionally stable going ahead and unstable going
+   astern. That single sign change is the entire "skittish in reverse" feel and
+   it costs one branch. */
+function foilCoeffs(kind, alpha, fRev) {
+  const t = FOIL[kind];
+  const a = wrapPi(alpha);
+  const sgn = a < 0 ? -1 : 1;
+  let deg = Math.abs(a) / RAD;
+  let cl, cd;
+  if (deg <= 90) {
+    cl = tableAt(t.a, t.cl, deg);
+    cd = tableAt(t.a, t.cd, deg);
+  } else {
+    const ar = 180 - deg;                       // mirrored angle of attack
+    cl = -fRev * tableAt(t.a, t.cl, ar);        // weaker, and the other way
+    cd = tableAt(t.a, t.cd, ar) * (1 + 0.6 * Math.cos(ar * RAD));
+  }
+  return { cl: sgn * cl, cd };
+}
+
+/* A lifting panel. `delta` is its own deflection (zero for the keel).
+
+   Sign convention, verified against all four behaviours that matter:
+     - ahead, drifting to starboard, no helm  -> force to port, bow swings to
+       starboard toward the drift. Directionally STABLE.
+     - astern, drifting to starboard, no helm -> bow swings to starboard, which
+       increases the drift. Directionally UNSTABLE.
+     - ahead, helm to starboard  -> force to port at the stern, bow to starboard.
+     - astern, helm to starboard -> force to starboard, stern to starboard,
+       which is what actually happens when you reverse with the wheel over. */
+function addFoil(pn, u_i, v_i, delta, acc) {
+  const V2 = u_i * u_i + v_i * v_i;
+  if (V2 < 1e-8) return null;
+  const V = Math.sqrt(V2);
+  const alpha = Math.atan2(v_i, u_i) + delta;
+  const { cl, cd } = foilCoeffs(pn.foil, alpha, pn.fRev);
+  const q = 0.5 * RHO_W * pn.A * V2;
+  const L = cl * q, D = cd * q;
+  // Lift acts along (v, -u)/V; drag along (-u, -v)/V.
+  const Fx = (L * v_i - D * u_i) / V;
+  const Fy = (-L * u_i - D * v_i) / V;
+  acc.Fx += Fx; acc.Fy += Fy; acc.Mz += pn.x * Fy;
+  return { Fx, Fy, alpha };
+}
+
+/* The force accumulator. `dx/dy/dz` collect LINEAR damping coefficients rather
+   than forces, so the integrator can apply them implicitly (§6) — that is what
+   keeps stiff line and contact damping stable at this timestep. */
+function newAcc() {
+  return { Fx: 0, Fy: 0, Mz: 0, dx: 0, dy: 0, dz: 0 };
+}
+
+function computeForces(S, env, dt, acc, dbg) {
+  const drv = DRIVES[S.drive];
+
+  /* ---- 1. water-relative velocity: the ONE place the tide enters --------- */
+  const Ww = env.uniformCurrent || currentAt(S.X, S.Y, env.tideRate);
+  const Wb = worldToBody(Ww.x, Ww.y, S.psi);
+  const ua = S.u - Wb.x;
+  const va = S.v - Wb.y;
+  S._ua = ua; S._va = va;
+
+  /* ---- 2. hull surge resistance ----------------------------------------- */
+  // Split into the part proportional to u (handed to the implicit integrator)
+  // and the rest. The linear term's water-relative offset stays exact:
+  //   -X_u*(u - Wb.x)  =  -X_u*u  +  X_u*Wb.x
+  acc.dx += HULL.X_u;
+  acc.Fx += HULL.X_u * Wb.x;
+  const kA = ua < 0 ? HULL.k_astern : 1;
+  acc.Fx -= HULL.X_uu * ua * Math.abs(ua) * kA;
+  acc.Fx -= HULL.X_res * Math.sign(ua) * Math.pow(Math.abs(ua), HULL.X_resExp);
+  if (S.gear === 0) acc.Fx -= drv.X_pd * ua * Math.abs(ua);
+
+  acc.dy += HULL.Y_v;  acc.Fy += HULL.Y_v * Wb.y;
+  acc.dz += HULL.N_r;
+  acc.Mz -= HULL.N_rr * S.r * Math.abs(S.r);
+
+  /* ---- 3. underwater panels --------------------------------------------- */
+  // Crossflow panels give anisotropic drag AND yaw damping AND the shape of
+  // the pivot point, all from one loop. The r*x term is what does it.
+  for (const pn of PANELS) {
+    const u_i = ua;
+    const v_i = va + S.r * pn.x;
+    if (pn.type === "cross") {
+      const Y = -0.5 * RHO_W * pn.cdc * pn.A * Math.abs(v_i) * v_i;
+      acc.Fy += Y; acc.Mz += pn.x * Y;
+    } else {
+      const d = pn.foil === "rudder" ? S.delta : 0;
+      // The rudder's inflow is reduced by the hull's wake when making way
+      // ahead, and not at all when going astern, where it leads. See HELM.
+      let uu = u_i, vv = v_i;
+      if (pn.foil === "rudder" && u_i > 0) {
+        const k = 1 - HELM.wakeAhead;
+        uu = u_i * k; vv = v_i * k;
+      }
+      const f = addFoil(pn, uu, vv, d, acc);
+      if (dbg && pn.foil === "rudder" && f) dbg.rudderFree = f;
+    }
+  }
+
+  /* ---- 4. Coriolis and the Munk moment ----------------------------------
+     Inertial terms, so they use GROUND velocities. The Munk moment is
+     (m_x - m_y)*u*v, and because sway added mass is twice the surge value it is
+     large and DESTABILISING: it pushes a developing turn further in. It is a
+     big part of why a yacht skids round a corner instead of tracking like a
+     car, and it is free. A sign error here makes her feel unnaturally stable
+     (test T7). */
+  acc.Fx += BOAT.m_y * S.v * S.r;
+  acc.Fy -= BOAT.m_x * S.u * S.r;
+  acc.Mz += (BOAT.m_x - BOAT.m_y) * S.u * S.v;
+
+  /* ---- 5. propeller ------------------------------------------------------ */
+  const nTarget = ENGINE.idleRev + (1 - ENGINE.idleRev) * Math.abs(S.lever);
+  S.n += (nTarget - S.n) * (1 - Math.exp(-dt / drv.tau_n));
+  const g = S.n * S.n;
+  let T = 0;
+  if (S.gear !== 0) {
+    const Tmax = S.gear > 0 ? drv.T_ahead : drv.T_astern;
+    const uzt  = S.gear > 0 ? drv.u_zt_ahead : drv.u_zt_astern;
+    const ramp = S.gear > 0 ? clamp(S.tInGear / 0.30, 0, 1)
+                            : drv.asternRamp(S.tInGear);
+    T = S.gear * Tmax * g * ramp * clamp(1 - S.gear * ua / uzt, 0, 1.25);
+  }
+  S._T = T;
+  acc.Fx += T;                        // on the centreline: no moment of its own
+
+  /* ---- 6. prop walk -----------------------------------------------------
+     A transverse force at the propeller. Applying it there and letting rigid
+     body mechanics produce the yaw moment means there is no separate moment
+     formula to get wrong.
+
+     Two decay terms, and both are needed. f_speed kills it as she gathers way.
+     f_attach kills it as axial flow establishes over a couple of seconds —
+     without that, a long steady astern pull against a line would keep walking
+     at full strength forever. It is why sailors talk about BURSTS: three short
+     kicks walk the stern far further than one long pull. */
+  const want = S.gear !== 0 ? 1 : 0;
+  S.att += (want - S.att) * (1 - Math.exp(-dt / ENGINE.tau_att));
+  const fSpeed = 1 / (1 + sq(Math.abs(ua) / ENGINE.u_ref_pw));
+  const fAtt = 1 - ENGINE.attDepth * S.att;
+  const kpw = S.gear < 0 ? drv.k_pw_astern : drv.k_pw_ahead;
+  // Astern: force to PORT at the stern. x_prop is negative, so the moment is
+  // positive, so the bow swings to starboard. Right-handed prop, as fitted.
+  const Ypw = (S.gear < 0 ? -1 : S.gear > 0 ? 1 : 0)
+            * kpw * Math.abs(T) * fSpeed * fAtt;
+  acc.Fy += Ypw; acc.Mz += drv.x_prop * Ypw;
+  if (dbg) dbg.propwalk = { Y: Ypw, x: drv.x_prop };
+
+  /* ---- 7. rudder: the propeller jet, AHEAD GEAR ONLY --------------------
+     This is the crux of the whole simulator.
+
+     In ahead gear the propeller throws a jet straight over the blade, so you
+     can generate a large steering moment with the boat barely moving. In astern
+     gear the propeller draws its water FROM astern: the rudder sits in dead,
+     reversed water and does nothing whatsoever. Hence the structural `gear > 0`
+     branch rather than a tuned fudge — see tests T6 and T8.
+
+     Formulated as momentum deflection (a fraction of thrust turned sideways)
+     rather than half-rho-V-squared over the blade area. The jet's momentum flux
+     IS the thrust, so this form is automatically bounded; the lift form gives
+     an absurd 15 kN at a standstill. */
+  let Ywash = 0;
+  if (S.gear > 0 && T > 0) {
+    const fd = tableAt(WASH_DEFL.a, WASH_DEFL.f, Math.abs(S.delta) / RAD);
+    // Helm to starboard -> force to port at the stern -> bow to starboard.
+    Ywash = -Math.sign(S.delta) * drv.k_wash * T * fd / (1 + 0.5 * sq(ua / 3.0));
+  }
+  acc.Fy += Ywash; acc.Mz += BOAT.x_rud * Ywash;
+  if (dbg) dbg.wash = { Y: Ywash, x: BOAT.x_rud };
+
+  /* ---- 8. thrusters ----------------------------------------------------- */
+  for (const which of ["bow", "stern"]) {
+    const cfg = THRUSTERS[which], th = S[which + "Thr"];
+    if (!th.fitted) continue;
+    const eta = 1 / (1 + sq(Math.abs(ua) / THRUSTERS.u_fade));
+    // The couple collapses faster than the force does, because at speed the
+    // jet's downstream suction partly cancels it. Model that by walking the
+    // effective application point back towards midships.
+    const xEff = cfg.x - Math.sign(cfg.x)
+               * clamp(0.90 * Math.abs(ua) / THRUSTERS.u_fade, 0, 2.50);
+    const Y = eta * cfg.T * th.out * th.sag;
+    acc.Fy += Y; acc.Mz += xEff * Y;
+    if (dbg) dbg[which + "Thrust"] = { Y, x: xEff };
+  }
+
+  /* ---- 9. wind ---------------------------------------------------------- */
+  const W = trueWind(S, env);
+  let Yair = 0;
+  for (const p of (env.noAir ? [] : WIND_PANELS)) {
+    const pw = bodyToWorld(p.x, 0, S.psi);
+    const sh = shelterAt(S.X + pw.x, S.Y + pw.y, W);
+    // Apparent wind at this panel, including the panel's own rotational
+    // velocity — which gives a little aerodynamic yaw damping, free.
+    const vb = bodyToWorld(S.u, S.v + S.r * p.x, S.psi);
+    const aw = worldToBody(W.x * sh - vb.x, W.y * sh - vb.y, S.psi);
+    const Va2 = aw.x * aw.x + aw.y * aw.y;
+    if (Va2 < 1e-6) continue;
+    const Va = Math.sqrt(Va2), q = 0.5 * RHO_A * Va2;
+    const sy = aw.y / Va;
+    // The force acts the way the air is going: no angle conventions to invert.
+    const Fx = q * WINDAGE.A_frontal * p.share * WINDAGE.Cx * (aw.x / Va);
+    const Fy = q * p.A * WINDAGE.Cy * (1 + WINDAGE.CyPeak * sy * sy) * sy;
+    acc.Fx += Fx; acc.Fy += Fy; acc.Mz += p.x * Fy;
+    Yair += Fy;
+  }
+  S._Yair = Yair;
+  S._heel = (Yair * WINDAGE.z_cop) / (BOAT.disp * 9.81 * BOAT.gm);
+  if (dbg) dbg.wind = { Y: Yair, x: 0.93, tw: W };
+
+  /* ---- 10. mooring lines and contacts (ground-relative, see §7 and §8) -- */
+  addLineForces(S, acc, dbg);
+  addContactForces(S, acc, dbg);
+}
+
+/* ==========================================================================
+   §6  MOORING LINES
+
+   A line is slack — and therefore does absolutely nothing — until it comes
+   taut, then it is a spring with damping. Nylon dockline is genuinely stretchy;
+   that is not a simplification, it is the shock absorber the rope is designed
+   to be, and it is also why this stays numerically calm.
+
+   Stability: EA 90 kN over a 5 m line gives k = 18 kN/m, so the natural
+   frequency against 8.7 t is 1.44 rad/s and omega*dt at 120 Hz is 0.012. Three
+   orders of margin. No substepping, no implicit treatment needed.
+   ========================================================================== */
+
+function lineStiffness(L0) { return LINE.EA / Math.max(L0, 1.0); }
+
+function addLineForces(S, acc, dbg) {
+  for (const ln of S.lines) {
+    ln.tension = 0; ln.taut = false;
+    if (ln.bollard == null) continue;
+    const b = bollardByNumber(ln.bollard);
+    if (!b) { ln.bollard = null; continue; }
+    const cl = CLEATS[ln.cleat];
+
+    // Where the cleat actually is, and how fast that point is moving. Note the
+    // rigid-body term: a point off the centreline moves with the yaw rate too.
+    const cw = bodyToWorld(cl.x, cl.y, S.psi);
+    const ax = S.X + cw.x, ay = S.Y + cw.y;
+    const dx = b.x - ax, dy = b.y - ay;
+    const L = hypot(dx, dy) || 1e-6;
+    ln.length = L;
+
+    const e = L - ln.L0;
+    if (e <= 0) continue;                       // slack: costs nothing at all
+
+    const ux = dx / L, uy = dy / L;             // unit vector cleat -> bollard
+    const vb = { x: S.u - S.r * cl.y, y: S.v + S.r * cl.x };
+    const vw = bodyToWorld(vb.x, vb.y, S.psi);
+    const dLdt = -(vw.x * ux + vw.y * uy);      // positive = still stretching
+
+    const k = lineStiffness(ln.L0);
+    const c = 2 * LINE.zeta * Math.sqrt(k * BOAT.m_x);
+    let Tn = k * e + c * Math.max(0, dLdt);
+
+    // A line merely held by hand slips above what a person can hold. That is
+    // how you should take up a line on a moving boat, and it is forgiving.
+    if (!ln.madeFast && Tn > LINE.handHold) {
+      ln.L0 = L - LINE.handHold / k;
+      Tn = LINE.handHold;
+      ln.slipping = true;
+    } else ln.slipping = false;
+
+    if (Tn > LINE.breakLoad) {                  // parted
+      ln.bollard = null; ln.parted = true;
+      S.events.push({ kind: "lineParted", cleat: ln.cleat });
+      continue;
+    }
+    ln.tension = Tn; ln.taut = true;
+
+    // Pull is towards the bollard.
+    const Fb = worldToBody(ux * Tn, uy * Tn, S.psi);
+    acc.Fx += Fb.x;
+    acc.Fy += Fb.y;
+
+    /* The moment. BOTH terms matter, and the second one is the important one:
+
+       A midship spring cleat sits 1.85 m off the centreline, so an aft-directed
+       pull on it makes a large bow-in couple through `-cl.y * Fb.x`. THAT is the
+       mechanism by which a spring line holds a yacht alongside — not the small
+       inboard component of the pull. Drop this term (easy to do if you assume
+       cleats are on the centreline) and motoring ahead against a spring simply
+       will not hold her in, and you will have no idea why. Test T13. */
+    acc.Mz += cl.x * Fb.y - cl.y * Fb.x;
+
+    if (dbg) (dbg.lines = dbg.lines || []).push({ ax, ay, bx: b.x, by: b.y, Tn });
+  }
+}
+
+/* Throw a line from the given cleat to a numbered bollard. Returns a message.
+   Range is deterministic: within reach and roughly the right side of the boat,
+   it lands. (Miss chance and lines in the water were a deliberate omission —
+   the skill being practised here is boat handling, not throwing.) */
+function throwLine(S, slotIdx, bollardNum) {
+  const ln = S.lines[slotIdx];
+  const b = bollardByNumber(bollardNum);
+  if (!b) return "no bollard " + bollardNum;
+
+  // Pick whichever side's cleat is nearer the bollard, for the spring and
+  // quarter lines. The bow and stern cleats are on the centreline.
+  const candidates = ln.cleatOptions;
+  let bestCleat = candidates[0], bestD = Infinity;
+  for (const cname of candidates) {
+    const cl = CLEATS[cname];
+    const cw = bodyToWorld(cl.x, cl.y, S.psi);
+    const d = hypot(b.x - (S.X + cw.x), b.y - (S.Y + cw.y));
+    if (d < bestD) { bestD = d; bestCleat = cname; }
+  }
+  if (bestD > LINE.rangeMax) {
+    return `bollard ${bollardNum} is ${bestD.toFixed(1)} m off — too far to throw`;
+  }
+  ln.cleat = bestCleat;
+  ln.bollard = bollardNum;
+  ln.L0 = Math.max(bestD, LINE.minLength);   // lands with no slack in it
+  ln.madeFast = false;                       // held by hand until you make fast
+  ln.parted = false;
+  return `${ln.name} line on bollard ${bollardNum} at ${bestD.toFixed(1)} m`;
+}
+
+/* ---- make fast alongside -------------------------------------------------
+   Rigs bow, spring and stern to sensible bollards and then WINCHES her into
+   lying parallel and snug, rather than freezing whatever angle she drifted in
+   at — which is what a single thrown line does, because it takes up at exactly
+   the length it happened to land at.
+
+   This does not teleport her and it is not a cheat: it sets each line's target
+   length to what it would be with her lying properly alongside, and the ordinary
+   tension-limited winching in warpLine does the work over the next several
+   seconds. If the wind is too strong for the winches to overcome, she will not
+   come in — which is the honest answer, and the reason to get a line on early. */
+
+/* The nearest bit of solid edge she could lie against, and which way it runs. */
+function nearestEdge(X, Y, maxDist) {
+  let best = null;
+  for (const ob of SOLIDS) {
+    if (ob.kind === "boat") continue;              // not alongside a neighbour
+    const p = ob.pts;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[i], b = p[(i + 1) % p.length];
+      const ex = b[0] - a[0], ey = b[1] - a[1];
+      const L2 = ex * ex + ey * ey;
+      if (L2 < 1e-9) continue;
+      const t = clamp(((X - a[0]) * ex + (Y - a[1]) * ey) / L2, 0, 1);
+      const cx = a[0] + ex * t, cy = a[1] + ey * t;
+      const d = hypot(X - cx, Y - cy);
+      if (!best || d < best.d) {
+        const L = Math.sqrt(L2);
+        best = { d, cx, cy, ex: ex / L, ey: ey / L };
+      }
+    }
+  }
+  return best && best.d <= maxDist ? best : null;
+}
+
+function makeFastAlongside(S) {
+  if (toKn(hypot(S.u, S.v)) > 1.2) return "too much way on — take it off her first";
+  const edge = nearestEdge(S.X, S.Y, BOAT.beam / 2 + 7);
+  if (!edge) return "nothing alongside to make fast to";
+
+  // Where she ought to be lying: parallel to that edge, a fender off it.
+  let nx = S.X - edge.cx, ny = S.Y - edge.cy;
+  const nd = hypot(nx, ny);
+  if (nd < 0.05) { nx = -edge.ey; ny = edge.ex; }   // sitting on the edge
+  else { nx /= nd; ny /= nd; }
+  const off = BOAT.beam / 2 + 0.22;
+  const tX = edge.cx + nx * off, tY = edge.cy + ny * off;
+
+  // Heading along the edge, whichever way round is nearer to how she lies now.
+  let tPsi = Math.atan2(edge.ex, edge.ey);
+  if (Math.abs(wrapPi(tPsi - S.psi)) > Math.PI / 2) tPsi = wrapPi(tPsi + Math.PI);
+  if (Math.abs(toDeg(wrapPi(tPsi - S.psi))) > 32) {
+    return `she is lying ${Math.abs(toDeg(wrapPi(tPsi - S.psi))).toFixed(0)}° across — square her up first`;
+  }
+
+  const port = worldToBody(-nx, -ny, tPsi).y < 0;
+
+  /* Only bollards on the face she is actually lying against are candidates.
+     Without this it happily picks one round the corner on another face, and
+     then spends the next minute hauling her diagonally into it. */
+  const onThisWall = WORLD.bollards.filter((b) => {
+    const dx = b.x - edge.cx, dy = b.y - edge.cy;
+    return Math.abs(dx * nx + dy * ny) < 2.2;      // perpendicular to the face
+  });
+  // Position along the face, so "forward" and "aft" mean something.
+  const along = (b) => (b.x - edge.cx) * edge.ex + (b.y - edge.cy) * edge.ey;
+  const aheadIsPositive = bodyToWorld(1, 0, tPsi).x * edge.ex
+                        + bodyToWorld(1, 0, tPsi).y * edge.ey > 0;
+
+  const at = (name) => {                            // cleat, lying properly alongside
+    const c = CLEATS[name], w = bodyToWorld(c.x, c.y, tPsi);
+    return { x: tX + w.x, y: tY + w.y };
+  };
+  const plan = [
+    { slot: 0, cleat: "BOW",                    lead: +1 },  // leads forward
+    { slot: 1, cleat: port ? "SPR_P" : "SPR_S", lead:  0 },  // spring, close in
+    { slot: 2, cleat: port ? "QTR_P" : "QTR_S", lead: -1 },  // leads aft
+  ];
+
+  const done = [], taken = new Set();
+  for (const p of plan) {
+    const cw = at(p.cleat);
+    let best = null;
+    for (const b of onThisWall) {
+      if (taken.has(b.n)) continue;
+      const d = hypot(b.x - cw.x, b.y - cw.y);
+      if (d > LINE.rangeMax) continue;
+      // Prefer one lying the way this line should lead, and a sensible scope.
+      const fwd = (along(b) - along({ x: cw.x, y: cw.y })) * (aheadIsPositive ? 1 : -1);
+      const score = p.lead === 0 ? -d : fwd * p.lead * 2.0 - Math.abs(d - 3.5);
+      if (!best || score > best.score) best = { b, d, score };
+    }
+    if (!best) continue;
+    taken.add(best.b.n);
+    const ln = S.lines[p.slot];
+    ln.cleat = p.cleat;
+    ln.bollard = best.b.n;
+    ln.madeFast = true;
+    ln.parted = false;
+    // Start at whatever length it is right now, so nothing snatches, then
+    // winch each one up to a snug tension. Hauling to a TENSION rather than to
+    // a computed length is what makes this self-correcting: three lines all
+    // brought up snug pull her square against her fenders on their own, and no
+    // arithmetic has to predict where she will end up.
+    const now = bodyToWorld(CLEATS[p.cleat].x, CLEATS[p.cleat].y, S.psi);
+    ln.L0 = Math.max(hypot(best.b.x - (S.X + now.x), best.b.y - (S.Y + now.y)),
+                     LINE.minLength);
+    ln.targetL0 = null;
+    ln.snugTo = LINE.snugTension;
+    ln.snugUntil = S.t + LINE.snugWindow;
+    done.push(`${ln.name}→${best.b.n}`);
+  }
+  if (!done.length) return `no bollards on this face within ${LINE.rangeMax} m`;
+  return `taking up ${done.join(", ")} — winching her alongside`;
+}
+
+/* Haul in or pay out. Hauling against load is slow — 900 N is about what one
+   person braced against a wet line can manage, which on 8 tonnes is 0.11 m/s².
+   She moves, slowly, exactly as she should. */
+function warpLine(ln, dir, dt) {
+  if (ln.bollard == null) return;
+  if (dir < 0) {                                    // pay out: easy
+    ln.L0 = Math.min(ln.L0 + LINE.ratePayout * dt, 60);
+  } else {
+    const cap = ln.madeFast ? LINE.winchHaul : LINE.handHaul;
+    const rate = LINE.rateFree * clamp(1 - ln.tension / cap, 0, 1);
+    ln.L0 = Math.max(ln.L0 - rate * dt, LINE.minLength);
+  }
+}
+
+/* ==========================================================================
+   §7  CONTACT — hull, fenders, pontoons, neighbours, and the bottom
+
+   The hull is a convex polygon on the fender line rather than a capsule,
+   because at a finger berth the whole question is whether the stem, the
+   shoulder or the quarter touches first.
+
+   Contact is a stiff penalty spring with its damping handed to the implicit
+   integrator, plus Coulomb friction. Friction matters: without it she slides
+   along a pontoon forever instead of scrubbing off her way, and the moment from
+   an off-centre contact is what makes her slew alongside when she kisses a
+   finger at an angle.
+   ========================================================================== */
+
+/* Fender stations, port and starboard, at fixed positions — she is rigged fore
+   and aft on both sides, as you would be for a marina.
+
+   What this does NOT model is choosing where to hang them: you cannot move them,
+   so being caught out is never a matter of having fendered the wrong spot. What
+   it DOES model is that her ends are bare. Reach is 1.30 m either side of a
+   station, which on the 40.1 leaves the forward 2.05 m and the after 1.55 m of
+   her unprotected — so a touch on the stem or on a quarter lands on bare
+   gelcoat, nearly nine times stiffer and scored two and a half times harder than
+   the same knock amidships. Which is exactly where you tend to hit things. */
+const FENDER_REACH = 1.30;
+
+/* Everything solid, flattened once at load into world-space polygons. */
+const SOLIDS = (() => {
+  const out = [];
+  const add = (pts, kind, k) => {
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p[0]; cy += p[1]; }
+    cx /= pts.length; cy /= pts.length;
+    let rad = 0, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) {
+      rad = Math.max(rad, hypot(p[0] - cx, p[1] - cy));
+      x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]);
+      x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]);
+    }
+    // An AABB as well as the circle: the land polygons are enormous, so a
+    // bounding-circle test never rejects them and every step would run a full
+    // separating-axis test against the whole shoreline.
+    out.push({ pts, kind, k, cx, cy, rad, x0, y0, x1, y1 });
+  };
+  for (const l of WORLD.land)      add(l.pts, "wall", CONTACT.k_hull);
+  for (const b of WORLD.buildings) add(b.pts, "wall", CONTACT.k_hull);
+  for (const p of WORLD.pontoons)  add(p.pts, "pontoon", CONTACT.k_hull);
+  for (const m of WORLD.mooredBoats) {
+    const poly = makeHullPoly(m.loa, m.beam).map(([x, y]) => {
+      const w = bodyToWorld(x, y, m.psi);
+      return [m.x + w.x, m.y + w.y];
+    });
+    add(poly, "boat", CONTACT.k_fender);
+  }
+  return out;
+})();
+
+function projectPoly(poly, nx, ny) {
+  let lo = Infinity, hi = -Infinity;
+  for (const p of poly) {
+    const d = p[0] * nx + p[1] * ny;
+    if (d < lo) lo = d;
+    if (d > hi) hi = d;
+  }
+  return { lo, hi };
+}
+function pointInPoly(poly, x, y) {
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    if ((x - a[0]) * ey - (y - a[1]) * ex > 1e-9) return false;   // CW winding
+  }
+  return true;
+}
+
+/* Separating-axis test. Returns the shallowest way to push A out of B. */
+function satOverlap(A, B) {
+  let depth = Infinity, nx = 0, ny = 0;
+  const axes = [];
+  for (const poly of [A, B]) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const ex = b[0] - a[0], ey = b[1] - a[1];
+      const l = hypot(ex, ey);
+      if (l > 1e-9) axes.push([-ey / l, ex / l]);
+    }
+  }
+  for (const [axx, axy] of axes) {
+    const pa = projectPoly(A, axx, axy), pb = projectPoly(B, axx, axy);
+    const d1 = pa.hi - pb.lo, d2 = pb.hi - pa.lo;
+    if (d1 <= 0 || d2 <= 0) return null;              // a gap: no contact
+    const d = Math.min(d1, d2), s = d1 < d2 ? -1 : 1;
+    if (d < depth) { depth = d; nx = axx * s; ny = axy * s; }
+  }
+  return { depth, nx, ny };
+}
+
+function addContactForces(S, acc, dbg) {
+  // The open-water acceptance tests run outside the marina, which is only 250 m
+  // across, so they switch the world off.
+  if (S.testMode) return;
+
+  // World-space hull, rebuilt each step.
+  const poly = [];
+  for (const [x, y] of HULL_POLY) {
+    const w = bodyToWorld(x, y, S.psi);
+    poly.push([S.X + w.x, S.Y + w.y]);
+  }
+  S._hull = poly;
+
+  for (const ob of SOLIDS) {
+    // Broadphase: box first, then circle.
+    if (S.X + HULL_RADIUS < ob.x0 || S.X - HULL_RADIUS > ob.x1 ||
+        S.Y + HULL_RADIUS < ob.y0 || S.Y - HULL_RADIUS > ob.y1) continue;
+    if (hypot(ob.cx - S.X, ob.cy - S.Y) > ob.rad + HULL_RADIUS) continue;
+    const hit = satOverlap(poly, ob.pts);
+    if (!hit) continue;
+
+    // Contact point: centroid of whichever hull corners are actually inside.
+    let px = 0, py = 0, cnt = 0;
+    for (const p of poly) {
+      if (pointInPoly(ob.pts, p[0], p[1])) { px += p[0]; py += p[1]; cnt++; }
+    }
+    if (!cnt) {
+      for (const p of ob.pts) {
+        if (pointInPoly(poly, p[0], p[1])) { px += p[0]; py += p[1]; cnt++; }
+      }
+    }
+    if (!cnt) continue;
+    px /= cnt; py /= cnt;
+
+    // Is a fender between us and it? Where you hung them matters.
+    const rb = worldToBody(px - S.X, py - S.Y, S.psi);
+    let fendered = false;
+    for (const fx of FENDERS) {
+      if (Math.abs(rb.x - fx) < FENDER_REACH && Math.abs(rb.y) > BOAT.beam * 0.35) {
+        fendered = true; break;
+      }
+    }
+    const k  = fendered ? CONTACT.k_fender : ob.k;
+    const mu = fendered ? CONTACT.mu_fender : CONTACT.mu_hull;
+
+    // Velocity of the touching point, GROUND relative — the pontoon is bolted
+    // to the earth, not floating in the tide.
+    const vb = { x: S.u - S.r * rb.y, y: S.v + S.r * rb.x };
+    const nb = worldToBody(hit.nx, hit.ny, S.psi);       // push direction, body
+    const vn = vb.x * nb.x + vb.y * nb.y;                // >0 = separating
+    const pen = Math.max(0, hit.depth - CONTACT.slop);
+
+    // Normal: penalty spring plus a positional nudge. Damping goes to the
+    // integrator's implicit terms, which is what keeps this calm at 120 Hz.
+    let Fn = k * pen + CONTACT.baumgarte * pen * BOAT.m_x / DT * 0.02;
+    if (Fn < 0) Fn = 0;
+    const c = 2 * 0.9 * Math.sqrt(k * BOAT.m_x);
+    acc.dx += c * nb.x * nb.x;
+    acc.dy += c * nb.y * nb.y;
+
+    // Friction, Coulomb-capped, opposing the sliding component.
+    const tbx = -nb.y, tby = nb.x;
+    const vt = vb.x * tbx + vb.y * tby;
+    const Ft = clamp(-3000 * vt, -mu * Fn, mu * Fn);
+
+    const Fx = Fn * nb.x + Ft * tbx;
+    const Fy = Fn * nb.y + Ft * tby;
+    acc.Fx += Fx; acc.Fy += Fy;
+    acc.Mz += rb.x * Fy - rb.y * Fx;
+
+    // Impact scoring, on energy rather than raw speed: the same speed beam-on
+    // is twice the energy of the same speed bow-on, because sway added mass is
+    // twice surge. That is correct, and it is why a flat landing hurts.
+    if (vn < -0.02) {
+      const mEff = 1 / (sq(nb.x) / BOAT.m_x + sq(nb.y) / BOAT.m_y);
+      const E = 0.5 * mEff * vn * vn;
+      S.contactEnergy = Math.max(S.contactEnergy, E);
+      // Energy is the physics; damage is what it costs you. A stem or a quarter
+      // landing on bare gelcoat hurts far more than the same speed on a fender.
+      S.damage = Math.max(S.damage, E * (fendered ? 1 : CONTACT.bareMul)
+                                      * (ob.kind === "boat" ? CONTACT.neighbourMul : 1));
+      S.contactSpeed = Math.max(S.contactSpeed, -vn);
+      if (!fendered) S.bareContact = true;
+      if (ob.kind === "boat") S.hitNeighbour = true;
+      S.contacts++;
+    }
+    if (dbg) (dbg.contacts = dbg.contacts || []).push({ px, py, Fn, fendered });
+  }
+
+  /* ---- the bottom -------------------------------------------------------- */
+  const kc = bodyToWorld((KEEL_FOOT.x0 + KEEL_FOOT.x1) / 2, 0, S.psi);
+  const d = depthAt(S.X + kc.x, S.Y + kc.y);
+  S.aground = d < KEEL_FOOT.depth;
+  if (S.aground) {
+    // A soft grounding: heavy extra drag and a yaw couple as she slews. This is
+    // realistically how you discover the edge of a dredged channel.
+    const bite = clamp((KEEL_FOOT.depth - d) / 0.6, 0, 1);
+    acc.dx += 8000 * bite;
+    acc.dy += 14000 * bite;
+    acc.dz += 60000 * bite;
+    if (Math.abs(S._ua) > 0.5) S.events.push({ kind: "grounding", speed: S._ua });
+  }
+}
+
+/* ==========================================================================
+   §8  INTEGRATOR
+
+   Semi-implicit (symplectic) Euler at a fixed 120 Hz, accumulator-driven, with
+   the linear damping terms applied implicitly:
+
+       v = (v + F/m*dt) / (1 + d/m*dt)
+
+   which is unconditionally stable however large the damper gets. That is what
+   lets stiff contact and line damping coexist with a 120 Hz step.
+
+   RK4 is deliberately NOT used. Its accuracy needs a smooth force field, and
+   this one is full of discontinuities every single step: lines going slack or
+   taut, gear engagement dead time, the `gear > 0` branch on prop wash, stall
+   table kinks, thruster thermal trips, contacts making and breaking. Across any
+   of those RK4 degrades to first order while still paying four times the cost,
+   and its intermediate stages evaluate physically invalid states (a line half
+   taut, a fender interpenetrating), which shows up as jitter.
+   ========================================================================== */
+
+const DT = 1 / 120, MAX_SUBSTEPS = 8;
+
+function stepSim(S, env, dt, dbg) {
+  /* ---- actuators, before any force is computed ------------------------- */
+  // Rudder: rate limited, then softened. The wheel takes real time to turn,
+  // and it gets heavy when the blade is loaded.
+  const loaded = dbg && dbg.rudderFree
+    ? clamp(Math.abs(dbg.rudderFree.Fy) / 4000, 0, 1) : 0;
+  const rate = HELM.maxRate * (1 - 0.35 * loaded);
+  const want = clamp(S.deltaCmd, -HELM.maxAngle, HELM.maxAngle);
+  S.delta += clamp(want - S.delta, -rate * dt, rate * dt);
+  S.delta += (want - S.delta) * (1 - Math.exp(-dt / HELM.tau));
+  S.delta = clamp(S.delta, -HELM.maxAngle, HELM.maxAngle);
+
+  // Gear: a dead time through neutral, and a longer one if slammed straight
+  // from ahead to astern. A real constraint, and one you have to learn.
+  const wantGear = Math.abs(S.lever) < ENGINE.neutralBand ? 0 : Math.sign(S.lever);
+  if (wantGear !== S.gearWant) {
+    S.gearWant = wantGear;
+    S.gearTimer = (S.gear !== 0 && wantGear !== 0 && wantGear !== S.gear)
+      ? ENGINE.gearSlamTime : ENGINE.gearDeadTime;
+    if (S.gear !== wantGear) S.gear = 0;
+  }
+  if (S.gearTimer > 0) {
+    S.gearTimer -= dt;
+    if (S.gearTimer <= 0 && S.gear !== S.gearWant) {
+      S.gear = S.gearWant;
+      S.tInGear = 0;
+      S.att = 0;                 // re-engaging resets the flow attachment, so
+    }                            // every fresh burst walks at full strength
+  }
+  S.tInGear += dt;
+
+  // Thrusters: spin-up, battery sag, and the thermal duty cycle.
+  for (const which of ["bow", "stern"]) {
+    const th = S[which + "Thr"];
+    if (!th.fitted) { th.out = 0; continue; }
+    if (th.cmd !== 0 && th.lastCmd !== 0 && th.cmd !== th.lastCmd) th.revDead = THRUSTERS.reverseDead;
+    if (th.revDead > 0) th.revDead -= dt;
+    const cmd = (th.tripped || th.revDead > 0) ? 0 : th.cmd;
+    th.lastCmd = th.cmd;
+    th.out += (cmd - th.out) * (1 - Math.exp(-dt / THRUSTERS.tau_spin));
+    th.burst = cmd !== 0 ? th.burst + dt : 0;
+    th.sag = 1 - (1 - THRUSTERS.sagTo) * clamp(th.burst / THRUSTERS.sagAfter, 0, 1);
+    th.therm += (Math.abs(th.out) / THRUSTERS.T_run - th.therm / THRUSTERS.T_cool) * dt;
+    th.therm = clamp(th.therm, 0, 1.4);
+    if (th.therm >= 1) th.tripped = true;
+    if (th.tripped && th.therm < THRUSTERS.resetBelow) th.tripped = false;
+  }
+
+  stepWind(S, env, dt, S.rng);
+  S.tidePhase += dt / (12.42 * 3600 / env.timeCompression);
+
+  /* ---- forces ---------------------------------------------------------- */
+  const acc = newAcc();
+  computeForces(S, env, dt, acc, dbg);
+
+  /* ---- velocities: implicit in the linear dampers ---------------------- */
+  S.u = (S.u + (acc.Fx / BOAT.m_x) * dt) / (1 + (acc.dx / BOAT.m_x) * dt);
+  S.v = (S.v + (acc.Fy / BOAT.m_y) * dt) / (1 + (acc.dy / BOAT.m_y) * dt);
+  S.r = (S.r + (acc.Mz / BOAT.I_z) * dt) / (1 + (acc.dz / BOAT.I_z) * dt);
+
+  /* ---- pose: integrates the GROUND-frame velocity.
+     This single line is where a uniform tidal stream correctly produces pure
+     translation and no force at all. ------------------------------------- */
+  const vw = bodyToWorld(S.u, S.v, S.psi);
+  S.X += vw.x * dt;
+  S.Y += vw.y * dt;
+  S.psi = S.psi + S.r * dt;
+  if (S.psi < 0) S.psi += 2 * Math.PI;
+  if (S.psi >= 2 * Math.PI) S.psi -= 2 * Math.PI;
+
+  /* ---- firewall: never let a bad frame poison the state --------------- */
+  if (!isFinite(S.u) || !isFinite(S.v) || !isFinite(S.r) || !isFinite(S.X)) {
+    console.warn("physics went non-finite; state reset to rest");
+    S.u = S.v = S.r = 0;
+  }
+  S.r = clamp(S.r, -1.2, 1.2);
+  S.u = clamp(S.u, -8, 8);
+  S.v = clamp(S.v, -8, 8);
+  S.t += dt;
+}
+
+/* ==========================================================================
+   §9  CAMERA
+   North-up chart view. Follows the boat with a soft spring and eases the zoom
+   in as you get close to hard geometry, so berthing zooms in on its own.
+   ========================================================================== */
+
+const cam = { x: 140, y: 40, scale: 3.2, targetScale: 3.2, manual: false };
+
+function resizeCanvas() {
+  const c = document.getElementById("world");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  c.width  = Math.floor(window.innerWidth  * dpr);
+  c.height = Math.floor(window.innerHeight * dpr);
+  c.style.width  = window.innerWidth + "px";
+  c.style.height = window.innerHeight + "px";
+  cam.dpr = dpr;
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+const w2s = (X, Y) => ({
+  x: (X - cam.x) * cam.scale + window.innerWidth  / 2,
+  y: (cam.y - Y) * cam.scale + window.innerHeight / 2,
+});
+const s2w = (sx, sy) => ({
+  X: (sx - window.innerWidth  / 2) / cam.scale + cam.x,
+  Y: cam.y - (sy - window.innerHeight / 2) / cam.scale,
+});
+
+/* ==========================================================================
+   §10  BOAT STATE AND DRILLS
+   ========================================================================== */
+
+function makeThruster(fitted) {
+  return { fitted, cmd: 0, lastCmd: 0, out: 0, therm: 0, tripped: false,
+           burst: 0, sag: 1, revDead: 0 };
+}
+
+/* The three lines you can rig. Which physical cleat each one uses is chosen at
+   throwing time from whichever side is nearer the bollard, so a spring led aft
+   from the port cleat happens because you threw it aft, not because of a mode. */
+function makeLines() {
+  return [
+    { name: "bow",    cleatOptions: ["BOW"],            cleat: "BOW",   bollard: null, L0: 0, madeFast: false, tension: 0,
+      targetL0: null, snugTo: null, snugUntil: 0 },
+    { name: "spring", cleatOptions: ["SPR_P", "SPR_S"], cleat: "SPR_P", bollard: null, L0: 0, madeFast: false, tension: 0,
+      targetL0: null, snugTo: null, snugUntil: 0 },
+    { name: "stern",  cleatOptions: ["STERN", "QTR_P", "QTR_S"], cleat: "STERN", bollard: null, L0: 0, madeFast: false, tension: 0,
+      targetL0: null, snugTo: null, snugUntil: 0 },
+  ];
+}
+
+function makeState(opts = {}) {
+  return {
+    X: opts.X ?? 150, Y: opts.Y ?? -20, psi: (opts.hdg ?? 0) * RAD,
+    u: opts.u ?? 0, v: 0, r: 0,
+    delta: 0, deltaCmd: 0,
+    lever: 0, gear: 0, gearWant: 0, gearTimer: 0, tInGear: 99,
+    n: ENGINE.idleRev, att: 0,
+    // Whatever drivetrain was asked for, if this boat can be had with it;
+    // otherwise her own first option. A Catalina 27 has no saildrive variant.
+    drive: DRIVE_KEYS.includes(opts.drive) ? opts.drive : DRIVE_KEYS[0],
+    // A boat that was never built with thrusters cannot have one switched on,
+    // whatever the drill asks for. A Contessa 32 has no tunnel in her bow.
+    bowThr:   makeThruster(THRUSTERS.canFit && (opts.bowThr ?? true)),
+    sternThr: makeThruster(THRUSTERS.canFit && (opts.sternThr ?? false)),
+    lines: makeLines(), selLine: 0,
+    gustG: 0, veer: 0, tidePhase: 0.25,
+    t: 0, trail: [], events: [],
+    contacts: 0, contactEnergy: 0, contactSpeed: 0, damage: 0,
+    bareContact: false, hitNeighbour: false, aground: false,
+    rng: makeRng(opts.seed ?? 12345),
+    _ua: 0, _va: 0, _T: 0, _Yair: 0, _heel: 0, _hull: null,
+  };
+}
+
+/* A drill is nothing but a start state, the conditions, and what counts as
+   done. Everything else is the same marina. */
+const DRILLS = [
+  {
+    name: "1. Finger berth, bow in, light airs",
+    teaches: "The basic approach. Get used to how far she carries her way.",
+    start: { X: 100, Y: 106, hdg: 270, bowThr: true },
+    env: { windSpeed: 6 * KN, windDir: 200 * RAD, gustiness: 0.3, tideRate: 0.05 },
+    target: { berth: [47, 121.5], heading: 0, tol: 2.2 },
+    hint: "Bow into the empty berth ringed in green, off your starboard bow. Bow line to bollard 13 or 14, stern to 3 or 4.",
+  },
+  {
+    name: "2. Finger berth, stern in, cross-tide",
+    teaches: "Reversing into a berth with prop walk fighting your steering.",
+    start: { X: 100, Y: 106, hdg: 270, bowThr: true },
+    env: { windSpeed: 8 * KN, windDir: 250 * RAD, gustiness: 0.4, tideRate: 0.30 },
+    target: { berth: [65, 121.0], heading: 180, tol: 2.4 },
+    hint: "Stern first into the ringed berth. Your stern walks to PORT, so approach from the east and let it swing you in. Lines to 6 and 7, then 16 or 17.",
+  },
+  {
+    name: "3. Alongside the hammerhead, blown off",
+    teaches: "When the wind is taking you off, a line ashore beats more throttle.",
+    start: { X: 152, Y: 70, hdg: 0, bowThr: false },
+    env: { windSpeed: 18 * KN, windDir: 90 * RAD, gustiness: 0.6, tideRate: 0.15 },
+    target: { alongside: [140.6, 126], heading: 0, tol: 2.6 },
+    hint: "Starboard side to the outer face of the hammerhead — bollards 21, 22 and 23. The wind is pushing you off it, so get a line on EARLY and spring her in.",
+  },
+  {
+    name: "4. Med moor, stern to the wall",
+    teaches: "Backing a long way straight, in a crosswind, with no rudder authority.",
+    start: { X: 90, Y: 120, hdg: 270, bowThr: true },
+    env: { windSpeed: 14 * KN, windDir: 250 * RAD, gustiness: 0.5, tideRate: 0.05 },
+    target: { berth: [74, 152], heading: 180, tol: 3.0 },
+    hint: "Reverse the length of the basin to the quay wall and stop short of it. Stern lines to bollards 39, 40 and 41 up on the quay.",
+  },
+  {
+    name: "5. Turn short round, no thrusters",
+    teaches: "Back and fill. Prop walk is a tool, not just a nuisance.",
+    start: { X: 150, Y: 60, hdg: 0, bowThr: false },
+    env: { windSpeed: 5 * KN, windDir: 180 * RAD, gustiness: 0.2, tideRate: 0.10 },
+    target: { turn: 180, tol: 18 },
+    hint: "Turn her round inside the fairway. Helm hard a-STARBOARD for a burst AHEAD, then hard a-PORT for a burst ASTERN so the helm works with the walk instead of against it. To starboard is far easier than to port — that is the propeller, not you.",
+  },
+  {
+    name: "6. The 44-footer, folding prop, breezy",
+    teaches: "The hardest boat here. Big windage, a folding prop that barely walks, and 27 cm of room each side of the berth.",
+    boat: "so44i", drive: "saildrive",
+    start: { X: 100, Y: 106, hdg: 270, bowThr: false },
+    env: { windSpeed: 12 * KN, windDir: 200 * RAD, gustiness: 0.45, tideRate: 0.20 },
+    target: { berth: [77, 121.0], heading: 180, tol: 2.4 },
+    hint: "Stern into the ringed berth on a 44-footer with a folding prop. Note the second of absolutely nothing when you engage astern, how little she walks, and that in this breeze she can barely back against the wind at all. Lines to 8 and 9.",
+  },
+  {
+    name: "7. Free roam",
+    teaches: "Everything on sliders. Set your own problem.",
+    start: { X: 150, Y: -30, hdg: 0, bowThr: true, sternThr: true },
+    env: { windSpeed: 12 * KN, windDir: 225 * RAD, gustiness: 0.4, tideRate: 0.45 },
+    target: null,
+    hint: "Free roam. The entrance is between the breakwaters to the north.",
+  },
+];
+
+/* ==========================================================================
+   §11  SELF-TEST — the behavioural acceptance suite
+
+   Open ssim.html?selftest=1 to run it. These are not unit tests of arithmetic;
+   each one asserts a NUMBER that a real 40-footer would produce, so they are
+   what the coefficients get tuned against. Changing one constant cannot quietly
+   break another behaviour without a row here going red.
+   ========================================================================== */
+
+const TEST_ENV = {
+  windSpeed: 0, windDir: 0, gustiness: 0, tideRate: 0, timeCompression: 20,
+};
+
+/* Run headless. `testMode` skips contacts and the seabed so open-water tests
+   are not fenced in by the marina, which is only 250 m across. */
+function simulate(opts, envOverrides, seconds, control) {
+  const S = makeState(Object.assign({ X: 140, Y: -40, hdg: 0 }, opts));
+  S.testMode = true;
+  const env = Object.assign({}, TEST_ENV, envOverrides);
+  const n = Math.round(seconds / DT);
+  for (let i = 0; i < n; i++) {
+    if (control) control(S, i * DT);
+    stepSim(S, env, DT, null);
+  }
+  return S;
+}
+
+/* Slam into gear immediately, skipping the engagement dead time, so a test
+   measures the burst itself rather than the wait. */
+function engage(S, lever) {
+  S.lever = lever;
+  S.gearWant = Math.abs(lever) < ENGINE.neutralBand ? 0 : Math.sign(lever);
+  S.gear = S.gearWant;
+  S.gearTimer = 0;
+  S.tInGear = 0;
+  S.att = 0;
+}
+
+// Heading change in degrees, signed, positive = bow to starboard.
+const hdgDelta = (S, from) => toDeg(wrapPi(S.psi - from));
+
+const TESTS = [
+
+/* ---- the tide, which is the most commonly botched part of any boat sim ---- */
+{
+  id: "T1", name: "Uniform tide exerts no force at all",
+  why: "A boat drifting with the stream must feel exactly nothing, and translate like flotsam.",
+  run() {
+    const w = { x: 1.5 * KN, y: 0 };                 // 1.5 kn setting east
+    const S = makeState({ X: 100, Y: -40, hdg: 0 });
+    S.testMode = true;
+    S.u = 0; S.v = 1.5 * KN;                         // at rest RELATIVE TO WATER
+    const X0 = S.X, psi0 = S.psi;
+    // noAir, so this isolates the tide. In still air a boat drifting with the
+    // stream does feel a knot and a half of apparent wind on the beam and is
+    // very slightly held back by it — real, but not what is under test here.
+    const env = Object.assign({}, TEST_ENV, { uniformCurrent: w, noAir: true });
+    for (let i = 0; i < 60 / DT; i++) stepSim(S, env, DT, null);
+    return {
+      vals: {
+        "drift over ground": [toKn(hypot(S.u, S.v)), 1.5, 0.01, "kn"],
+        "distance made": [S.X - X0, 1.5 * KN * 60, 0.1, "m"],
+        "heading change": [Math.abs(hdgDelta(S, psi0)), 0, 0.01, "deg"],
+        "speed through the water — must be exactly nil":
+          [toKn(hypot(S._ua, S._va)), 0, 0.001, "kn"],
+      },
+    };
+  },
+},
+{
+  id: "T2", name: "Top speed ahead",
+  why: "Anchors the whole surge drag model.",
+  run() {
+    const A = simulate({ drive: "shaft" }, {}, 180, (S) => { if (S.t === 0) engage(S, 1); });
+    const B = simulate({ drive: "saildrive" }, {}, 180, (S) => { if (S.t === 0) engage(S, 1); });
+    const mid = simulate({ drive: "shaft" }, {}, 180, (S) => { if (S.t === 0) engage(S, 0.45); });
+    return { vals: {
+      "shaft, full ahead":     [toKn(A.u), 7.1, 0.5, "kn"],
+      "saildrive, full ahead": [toKn(B.u), 6.6, 0.5, "kn"],
+      // Note: 5.3 kn, not the 6.0 the design note claimed for this notch — that
+      // row forgot to apply its own thrust-falloff-with-speed term. 5.3 kn at
+      // half lever on a 40 hp engine is the right answer.
+      "shaft, ahead 2":        [toKn(mid.u), 5.3, 0.4, "kn"],
+    } };
+  },
+},
+{
+  id: "T3", name: "Carrying her way in neutral",
+  why: "How far she runs on when you take the engine out is the single most important thing to have calibrated.",
+  run() {
+    const S = makeState({ X: 140, Y: -40, hdg: 0, u: 3 * KN });
+    S.testMode = true;
+    let d15 = null, d10 = null;
+    const X0 = S.Y;
+    for (let i = 0; i < 120 / DT; i++) {
+      stepSim(S, TEST_ENV, DT, null);
+      if (d15 === null && toKn(S.u) <= 1.5) d15 = S.Y - X0;
+      if (d10 === null && toKn(S.u) <= 1.0) d10 = S.Y - X0;
+    }
+    return { vals: {
+      "3.0 kn down to 1.5 kn": [d15, 17.8, 5, "m"],
+      "3.0 kn down to 1.0 kn": [d10, 29.9, 8, "m"],
+      "in boat lengths":       [d10 / BOAT.loa, 2.45, 0.7, "L"],
+    } };
+  },
+},
+{
+  id: "T4", name: "She will not slide sideways",
+  why: "Sway must be heavily damped or every berthing is a skate.",
+  run() {
+    const S = makeState({ X: 140, Y: -40, hdg: 0 });
+    S.testMode = true;
+    S.v = 1 * KN;
+    let t = 0, travel = 0;
+    for (let i = 0; i < 20 / DT; i++) {
+      stepSim(S, TEST_ENV, DT, null);
+      if (toKn(S.v) > 0.5) { t = S.t; travel = S.X - 140; }
+    }
+    return { vals: {
+      "time to halve 1 kn of sway": [t, 4.0, 2.5, "s"],
+      "distance while doing it":    [Math.abs(travel), 1.5, 1.2, "m"],
+    } };
+  },
+},
+
+/* ---- prop walk: priority number one ------------------------------------- */
+{
+  id: "T5", name: "PROP WALK — full astern from rest walks the stern to port",
+  why: `The headline behaviour: the stern must walk to port, consistently, with the helm unable to do anything about it.
+
+   The size of the swing is the one number in this whole suite I am least sure of, and it is worth knowing why. The design note asked for 22-28 degrees in a 5 second burst. Reaching that needs a transverse force around 45% of thrust, which is far outside anything published for prop walk (5-20% is the usual range). At a defensible 22% she swings about 13 degrees. Three effects each fight the walk and all three are real: her yaw inertia, the sway resistance of pushing 17.6 tonnes of effective mass sideways, and the rudder acting as a fin even reversed.
+
+   13 degrees of UNCORRECTABLE swing per burst is still a great deal in a marina — reversing 20 m into a berth leaves you badly off line. If it feels weak against the real boat, raise DRIVES.shaft.k_pw_astern; if it feels overdone, lower it. That one constant is the whole effect.`,
+  run() {
+    const A = simulate({ drive: "shaft" }, {}, 5, (S) => { if (S.t === 0) engage(S, -1); });
+    const B = simulate({ drive: "saildrive" }, {}, 5, (S) => { if (S.t === 0) engage(S, -1); });
+    return { vals: {
+      "shaft: speed astern":       [-toKn(A.u), 2.4, 0.8, "kn"],
+      "shaft: swing to stbd":      [hdgDelta(A, 0), 13.5, 4, "deg"],
+      "saildrive: speed astern":   [-toKn(B.u), 1.5, 0.7, "kn"],
+      "saildrive: swing to stbd":  [hdgDelta(B, 0), 2.7, 1.7, "deg"],
+      "both walk the SAME way (stern to port)":
+        [Math.sign(hdgDelta(A, 0)) + Math.sign(hdgDelta(B, 0)), 2, 0.001, ""],
+    } };
+  },
+},
+
+/* ---- rudder authority: priority number two ------------------------------ */
+{
+  id: "T6", name: "RUDDER — no authority at low speed",
+  why: "Below a knot with the engine in neutral the helm must do essentially nothing.",
+  run() {
+    const mk = (spd) => simulate({ u: spd * KN }, {}, 5,
+      (S) => { S.deltaCmd = HELM.maxAngle; });
+    return { vals: {
+      "0.5 kn, neutral, hard over": [Math.abs(hdgDelta(mk(0.5), 0)), 1.0, 1.6, "deg"],
+      "1.0 kn, neutral, hard over": [Math.abs(hdgDelta(mk(1.0), 0)), 4.0, 3.0, "deg"],
+      "4.0 kn, neutral, hard over": [Math.abs(hdgDelta(mk(4.0), 0)), 45, 35, "deg"],
+    } };
+  },
+},
+{
+  id: "T7", name: "RUDDER — steerage from the propeller wash, and none astern",
+  why: "The crux. A burst ahead against hard helm kicks her round without moving her. The same burst astern does nothing at all, because the propeller is drawing its water from astern and the blade sits in dead water.",
+  run() {
+    // Helm hard over BEFORE the burst, which is how the manoeuvre is actually
+    // done — you put the wheel over and then give her a kick, you do not spin
+    // the wheel and open the throttle at the same instant.
+    const burst = (drive, helm, lever) => simulate({ drive }, {}, 3, (S) => {
+      S.deltaCmd = helm;
+      if (S.t === 0) { S.delta = helm; engage(S, lever); }
+    });
+    const ah  = burst("shaft", HELM.maxAngle, 1);
+    const ahB = burst("saildrive", HELM.maxAngle, 1);
+    // Astern with the helm HARD TO PORT, so the rudder — if it had any effect
+    // at all — would be fighting the prop walk. Whatever she does is the walk.
+    const as       = burst("shaft", -HELM.maxAngle, -1);
+    const asNoHelm = burst("shaft", 0, -1);
+    return { vals: {
+      "shaft, ahead burst: heading":  [hdgDelta(ah, 0), 12, 7, "deg"],
+      "shaft, ahead burst: run made": [ah.Y + 40, 2.6, 2.2, "m"],
+      "saildrive, ahead burst":       [hdgDelta(ahB, 0), 5, 3.5, "deg"],
+      "astern, helm hard over vs amidships — difference":
+        [Math.abs(hdgDelta(as, 0) - hdgDelta(asNoHelm, 0)), 0, 3.0, "deg"],
+    } };
+  },
+},
+{
+  id: "T7b", name: "RUDDER — but steerage astern DOES arrive once she has sternway",
+  why: `The other half of getting reverse right, and easy to get wrong in the direction of making reverse hopeless at every speed.
+
+   A rudder going backwards is a foil in reversed flow: it separates early and keeps well under half its normal lift, but it does NOT keep none. Once she is making two knots astern there is real flow over the blade and she must answer the helm — sluggishly, but genuinely — because that is how you actually back a boat into a berth. Meanwhile the prop walk is fading with speed, so the two hand over: no steering at all at first, useful steering by two or three knots.
+
+   Both effects are measured here NET, with prop walk live and fighting the helm, because that is what the helmsman actually feels. At 1 kn the walk still wins and she carries on to starboard whatever you do — correct. By 2 kn the helm has taken over.`,
+  run() {
+    // Already carrying sternway, helm hard a-starboard, gentle astern to hold
+    // the way on. Positive = bow to starboard = the walk winning; negative = the
+    // helm winning. Going astern, the stern follows the wheel.
+    const steer = (kn) => {
+      const S = makeState({ X: 140, Y: -40, hdg: 0, drive: "shaft" });
+      S.testMode = true;
+      S.u = -kn * KN;
+      S.delta = S.deltaCmd = HELM.maxAngle;
+      engage(S, -0.45);
+      for (let i = 0; i < 6 / DT; i++) {
+        S.deltaCmd = HELM.maxAngle;
+        stepSim(S, TEST_ENV, DT, null);
+      }
+      return hdgDelta(S, 0);
+    };
+    const s1 = steer(1), s15 = steer(1.5), s2 = steer(2), s3 = steer(3), s4 = steer(4);
+    return { vals: {
+      "at 1.0 kn astern: walk and helm cancel, no steerage": [s1, 0.2, 2.5, "deg"],
+      "at 1.5 kn astern: she starts to answer":              [s15, -8.2, 4, "deg"],
+      "at 2.0 kn astern: answering clearly":                 [s2, -16.6, 5, "deg"],
+      "at 3.0 kn astern: answering properly":                [s3, -28.9, 7, "deg"],
+      "at 4.0 kn astern: full steerage":                     [s4, -39.6, 9, "deg"],
+      "and it builds steadily with speed rather than switching on":
+        [(s4 < s3 && s3 < s2 && s2 < s15 && s15 < s1) ? 1 : 0, 1, 0.001, ""],
+    } };
+  },
+},
+{
+  id: "T8", name: "Back and fill turns short round to starboard, and fights you to port",
+  why: `Turning her round in her own length, and the seamanship it teaches.
+
+   Helm hard a-starboard with a burst AHEAD throws the wash across the blade and swings the bow to starboard. Then — helm hard a-PORT — a burst ASTERN lets the prop walk swing the stern to port, which is the bow to starboard again, and the reversed helm now works WITH the walk instead of against it. Both phases turn her the same way and the translation roughly cancels, so she pivots inside her own length.
+
+   Reversing the helm for the astern kick only matters because she has real steerage astern; it beats holding the wheel over. And the whole manoeuvre is markedly worse to PORT, because there the walk fights the astern phase every single cycle. That asymmetry is the proof the prop-walk sign is right, and the reason you plan to turn, and to berth, the way your propeller wants to.`,
+  run() {
+    // mode "reverse" = the correct technique. "hold" = wheel left over throughout.
+    const cycle = (sign, mode) => {
+      const S = makeState({ X: 140, Y: -40, hdg: 0, drive: "shaft" });
+      S.testMode = true;
+      S.delta = S.deltaCmd = sign * HELM.maxAngle;
+      const period = 6.5;
+      let turned = 0, last = 0;
+      for (let i = 0; i < 40 / DT; i++) {
+        const ph = S.t % period;
+        const astern = ph >= 3.0 && ph < 5.5;
+        S.deltaCmd = (astern && mode === "reverse" ? -sign : sign) * HELM.maxAngle;
+        if (ph < DT * 1.5)                         engage(S, 0.45);   // kick ahead
+        else if (ph >= 2.0 && ph < 2.0 + DT * 1.5) engage(S, 0);
+        else if (ph >= 3.0 && ph < 3.0 + DT * 1.5) engage(S, -1);     // kick astern
+        else if (ph >= 5.5 && ph < 5.5 + DT * 1.5) engage(S, 0);
+        stepSim(S, TEST_ENV, DT, null);
+        // Accumulate, so more than 180 degrees of turn still counts.
+        const d = toDeg(wrapPi(S.psi));
+        let dd = d - last;
+        if (dd > 180) dd -= 360;
+        if (dd < -180) dd += 360;
+        turned += dd; last = d;
+      }
+      return { turned, drift: hypot(S.X - 140, S.Y + 40) };
+    };
+    const stbd = cycle(+1, "reverse"), port = cycle(-1, "reverse");
+    const held = cycle(+1, "hold");
+    return { vals: {
+      "to starboard in 40 s":          [Math.abs(stbd.turned), 101, 30, "deg"],
+      "and stayed inside":             [stbd.drift / BOAT.loa, 1.22, 0.8, "L"],
+      "to port, same 40 s":            [Math.abs(port.turned), 66, 25, "deg"],
+      "starboard beats port by":       [Math.abs(stbd.turned) - Math.abs(port.turned), 35, 24, "deg"],
+      "reversing the helm beats holding it over":
+        [Math.abs(stbd.turned) - Math.abs(held.turned), 23, 22, "deg"],
+    } };
+  },
+},
+{
+  id: "T15", name: "Steady turn ahead — she is a yacht, not a dinghy",
+  why: `Found by accident while chasing the astern complaint, and worth guarding: she was turning under power in 1.4 boat lengths at 17 deg/s, which is dinghy behaviour, not a 12-tonne-displacement 40-footer.
+
+   Two things were wrong. The rudder had no wake deficit going ahead, where it actually sits in the hull's boundary layer and sees only about 80% of her speed through the water — and force goes as the square of that. And three lumped crossflow panels under-count a continuous hull's resistance to yaw, so there was too little damping to hold against the Munk moment, which correctly contributes about 6 kNm AUGMENTING the turn.
+
+   The fix for the second one is deliberately quadratic (HULL.N_rr), so it bites on a fast turn at speed and is nearly absent at the slow yaw rates prop walk produces. Making it linear is exactly the mistake that flattened prop walk earlier.`,
+  run() {
+    const turn = (helmDeg) => {
+      const S = makeState({ X: 140, Y: -40, hdg: 0, drive: "shaft" });
+      S.testMode = true;
+      engage(S, 0.42);
+      for (let i = 0; i < 70 / DT; i++) stepSim(S, TEST_ENV, DT, null);   // settle
+      const entry = toKn(S.u);
+      for (let i = 0; i < 60 / DT; i++) {
+        S.deltaCmd = helmDeg * RAD;
+        stepSim(S, TEST_ENV, DT, null);
+      }
+      const V = hypot(S.u, S.v);
+      return { entry, rate: toDeg(S.r), spd: toKn(V),
+               dia: 2 * V / Math.max(Math.abs(S.r), 1e-4) / BOAT.loa,
+               drift: toDeg(Math.atan2(S.v, S.u)) };
+    };
+    const hard = turn(35), easy = turn(20);
+    return { vals: {
+      "entry speed":                      [hard.entry, 5.1, 0.4, "kn"],
+      "hard over: rate of turn":          [hard.rate, 9.2, 2.0, "deg/s"],
+      "hard over: tactical diameter":     [hard.dia, 1.95, 0.6, "L"],
+      "hard over: speed lost in the turn": [hard.spd, 3.7, 0.7, "kn"],
+      "hard over: drift angle, bow inside": [hard.drift, -9.3, 3, "deg"],
+      "20 deg helm opens the circle out":  [easy.dia, 3.18, 1.1, "L"],
+    } };
+  },
+},
+
+/* ---- wind --------------------------------------------------------------- */
+{
+  id: "T9", name: "WIND — beam on in 15 kn she goes sideways at about a knot",
+  why: "The number that decides whether you can hold a berth approach in a breeze. Measured over the first 12 seconds, while she is still beam-on — after that she falls off downwind and starts to sail, which is a different (and also correct) behaviour, tested below.",
+  run() {
+    const env = { windSpeed: 15 * KN, windDir: 90 * RAD };   // wind from the east
+    const S = simulate({ hdg: 0 }, env, 12, null);           // lying north, so beam-on
+    const W = trueWind(S, env);
+    const vb = bodyToWorld(S.u, S.v, S.psi);
+    // Her drift resolved along the direction the wind is actually blowing.
+    const wspd = hypot(W.x, W.y);
+    const downwind = (vb.x * W.x + vb.y * W.y) / wspd;
+    const aw = worldToBody(W.x - vb.x, W.y - vb.y, S.psi);
+    return { vals: {
+      "drift downwind after 12 s": [toKn(downwind), 0.85, 0.35, "kn"],
+      "she goes to LEEWARD, not to windward": [Math.sign(downwind), 1, 0.001, ""],
+      "heel while beam-on (visual only)": [Math.abs(toDeg(S._heel)), 3.2, 2.6, "deg"],
+      "apparent wind still forward of dead astern": [Math.abs(toDeg(Math.atan2(-aw.y, -aw.x))), 95, 60, "deg"],
+    } };
+  },
+},
+{
+  id: "T9b", name: "WIND — left alone she falls off and sails away downwind",
+  why: "A modern fin keeler with the rig forward will NOT sit beam-on indefinitely, and will not weathercock into the wind either: the bow blows off, she gathers way and runs off at a knot or two under bare poles. If she points up into the wind instead, the aerodynamic centre of effort has been put aft of the keel and the whole boat is wrong.",
+  run() {
+    const env = { windSpeed: 15 * KN, windDir: 90 * RAD };
+    const S = simulate({ hdg: 0 }, env, 120, null);
+    const W = trueWind(S, env);
+    const vb = bodyToWorld(S.u, S.v, S.psi);
+    const aw = worldToBody(W.x - vb.x, W.y - vb.y, S.psi);
+    const awa = Math.abs(toDeg(Math.atan2(-aw.y, -aw.x)));
+    return { vals: {
+      "drift once settled": [toKn(hypot(S.u, S.v)), 1.7, 0.6, "kn"],
+      "apparent wind well aft of the beam": [awa, 150, 40, "deg"],
+      "and she is making way FORWARD, not going backwards": [Math.sign(S.u), 1, 0.001, ""],
+    } };
+  },
+},
+{
+  id: "T10", name: "WIND — the bow goes first",
+  why: "Windage is biased forward, so released head to wind she falls off, and the bow moves much further than the stern. Everyone who has lost a bow in a marina knows this one.",
+  run() {
+    // Wind from the north, boat lying 20 degrees off head-to-wind. Exactly head
+    // to wind is a perfectly symmetric, and therefore perfectly balanced,
+    // unstable equilibrium — she needs a nudge to fall off, same as in life, and
+    // the first few degrees are slow before it runs away with her.
+    const psi0 = 20 * RAD;
+    const S = simulate({ hdg: 20 }, { windSpeed: 15 * KN, windDir: 0 }, 12, null);
+    const bowW = bodyToWorld(BOAT.bow, 0, S.psi), stnW = bodyToWorld(BOAT.transom, 0, S.psi);
+    const bow0 = bodyToWorld(BOAT.bow, 0, psi0),  stn0 = bodyToWorld(BOAT.transom, 0, psi0);
+    const bowMove = hypot(S.X + bowW.x - (140 + bow0.x), S.Y + bowW.y - (-40 + bow0.y));
+    const stnMove = hypot(S.X + stnW.x - (140 + stn0.x), S.Y + stnW.y - (-40 + stn0.y));
+    return { vals: {
+      "fell off, in 12 s": [Math.abs(hdgDelta(S, psi0)), 22, 18, "deg"],
+      "and fell AWAY from the wind, not up into it": [Math.sign(hdgDelta(S, psi0)), 1, 0.001, ""],
+      "bow moves further than the stern by": [bowMove / Math.max(stnMove, 0.01), 2.2, 1.6, "x"],
+    } };
+  },
+},
+
+/* ---- thrusters ---------------------------------------------------------- */
+{
+  id: "T11", name: "Thrusters fade with speed, and they overheat",
+  why: "A bow thruster is nearly useless above 2 kn, and it must not be an infinite crutch.",
+  run() {
+    const yawAccel = (spd) => {
+      const S = makeState({ u: spd * KN, bowThr: true });
+      S.testMode = true;
+      S.bowThr.cmd = 1; S.bowThr.out = 1; S.bowThr.sag = 1;
+      const acc = newAcc();
+      computeForces(S, Object.assign({}, TEST_ENV), DT, acc, null);
+      // Isolate the thruster's own contribution.
+      const S2 = makeState({ u: spd * KN, bowThr: false });
+      S2.testMode = true;
+      const acc2 = newAcc();
+      computeForces(S2, Object.assign({}, TEST_ENV), DT, acc2, null);
+      return (acc.Mz - acc2.Mz) / BOAT.I_z;
+    };
+    const a0 = yawAccel(0);
+    const S = makeState({ bowThr: true }); S.testMode = true; S.bowThr.cmd = 1;
+    let tripAt = null;
+    for (let i = 0; i < 400 / DT; i++) {
+      stepSim(S, TEST_ENV, DT, null);
+      if (S.bowThr.tripped && tripAt === null) tripAt = S.t;
+    }
+    return { vals: {
+      "yaw authority at 2 kn, vs at rest": [yawAccel(2) / a0, 0.42, 0.14, "x"],
+      "at 3 kn":                           [yawAccel(3) / a0, 0.24, 0.12, "x"],
+      "trips after":                       [tripAt ?? 999, 150, 30, "s"],
+    } };
+  },
+},
+
+/* ---- lines -------------------------------------------------------------- */
+{
+  id: "T12", name: "A line comes up without exploding",
+  why: "Stiff springs at a fixed timestep are where sims blow up. She must run the slack, be arrested smoothly, and settle.",
+  run() {
+    // Put a bollard 10 m ahead, drive astern until the bow line snubs.
+    const b = WORLD.bollards[0];
+    const S = makeState({ X: b.x, Y: b.y - 16, hdg: 0 });
+    S.testMode = true;
+    S.lines[0].bollard = b.n;
+    S.lines[0].cleat = "BOW";
+    S.lines[0].L0 = 10;
+    S.lines[0].madeFast = true;
+    S.u = -1 * KN;
+    let peakT = 0, peakStretch = 0;
+    for (let i = 0; i < 30 / DT; i++) {
+      stepSim(S, TEST_ENV, DT, null);
+      peakT = Math.max(peakT, S.lines[0].tension);
+      peakStretch = Math.max(peakStretch, (S.lines[0].length || 0) - S.lines[0].L0);
+    }
+    return { vals: {
+      "peak tension":  [peakT / 1000, 9.4, 6.0, "kN"],
+      "peak stretch":  [peakStretch, 1.05, 0.8, "m"],
+      // She will not be dead still: tethered by the bow she swings on the line,
+      // which is exactly what a boat on a single line does.
+      "settled speed": [Math.abs(toKn(S.u)), 0.2, 0.5, "kn"],
+      "still finite":  [isFinite(S.X) && isFinite(S.u) ? 1 : 0, 1, 0.001, ""],
+    } };
+  },
+},
+{
+  id: "T13", name: "A midship spring pins her alongside",
+  why: "The classic technique: spring led aft, engine ahead, and she sits there. It works because the spring cleat is 1.85 m off the centreline, so an aft pull on it makes a big bow-IN couple. If that off-centre term is missing this test fails and nothing else does.",
+  run() {
+    // Port side to, spring from the port midship cleat led aft.
+    const S = makeState({ X: 60, Y: 100, hdg: 90 });
+    S.testMode = true;
+    const cw = bodyToWorld(CLEATS.SPR_P.x, CLEATS.SPR_P.y, S.psi);
+    // A bollard 4.6 m aft of the cleat and 0.75 m outboard of it.
+    const back = bodyToWorld(-4.60, -0.75, S.psi);
+    const bx = S.X + cw.x + back.x, by = S.Y + cw.y + back.y;
+    WORLD.bollards.push({ n: 999, x: bx, y: by, kind: "test" });
+    S.lines[1].bollard = 999; S.lines[1].cleat = "SPR_P";
+    // Made fast with 3 cm of stretch already in it, which is what "taut" means
+    // in practice. A line at exactly its own length carries no load at all.
+    S.lines[1].L0 = hypot(bx - (S.X + cw.x), by - (S.Y + cw.y)) - 0.03;
+    S.lines[1].madeFast = true;
+    engage(S, 0.04);                                   // tickover ahead
+    const acc = newAcc();
+    computeForces(S, Object.assign({}, TEST_ENV), DT, acc, null);
+    WORLD.bollards.pop();
+    return { vals: {
+      // Negative Mz = bow to port = bow towards the pontoon on her port side.
+      "yaw moment (negative is bow-in)": [acc.Mz / 1000, -1.04, 0.9, "kNm"],
+      "inboard force (negative is towards the pontoon)": [acc.Fy, -87, 90, "N"],
+      "line tension": [S.lines[1].tension, 543, 400, "N"],
+    } };
+  },
+},
+
+/* ---- and finally: are the two boats actually different? ----------------- */
+{
+  id: "T14", name: "The saildrive is a meaningfully worse boat astern",
+  why: "If a player who has learned the shaft boat does not feel actively handicapped on the saildrive, the drivetrain difference is decorative.",
+  run() {
+    const wa = simulate({ drive: "shaft" }, {}, 5, (S) => { if (S.t === 0) engage(S, -1); });
+    const wb = simulate({ drive: "saildrive" }, {}, 5, (S) => { if (S.t === 0) engage(S, -1); });
+    const ka = simulate({ drive: "shaft" }, {}, 3, (S) => {
+      S.deltaCmd = HELM.maxAngle; if (S.t === 0) engage(S, 1); });
+    const kb = simulate({ drive: "saildrive" }, {}, 3, (S) => {
+      S.deltaCmd = HELM.maxAngle; if (S.t === 0) engage(S, 1); });
+    // How long before the folding prop actually bites?
+    const bite = simulate({ drive: "saildrive" }, {}, 2.0, (S) => { if (S.t === 0) engage(S, -1); });
+    selectBoat(ANCHOR_BOAT);
+    return { vals: {
+      // Around a fifth, not the two-fifths the design note's prose claimed —
+      // its own coefficient table implies a fifth, and a fifth is the better
+      // boat-handling lesson anyway: on a folding prop the walk is a hint
+      // rather than a shove, so you cannot lean on it to turn her.
+      "prop walk, saildrive as fraction of shaft": [hdgDelta(wb, 0) / hdgDelta(wa, 0), 0.20, 0.10, "x"],
+      "wash steering, ditto":                      [hdgDelta(kb, 0) / hdgDelta(ka, 0), 0.45, 0.22, "x"],
+      "saildrive speed astern after 2 s":          [-toKn(bite.u), 0.5, 0.45, "kn"],
+    } };
+  },
+},
+{
+  id: "T17", name: "The whole fleet behaves like boats",
+  why: `The other four boats are DERIVED from the 40.1 by scaling law rather than hand-authored, so the thing to guard is not any single number but that nothing came out absurd. Every boat must make 82-98% of her theoretical hull speed, must walk her stern to PORT astern, must answer the helm at 2 kn astern, must make sensible leeway, and must turn in a plausible number of her own lengths.
+
+   The 40.1 herself is included, and if she drifts from the values the other sixteen tests assert, the derivation has stopped being anchored and everything else here is worthless.`,
+  run() {
+    const vals = {};
+    let worstHull = 1, minWalk = 99, worstCtrl = -99, minLee = 9, maxLee = 0,
+        minTurn = 99, maxTurn = 0, anchorTop = 0;
+
+    for (let i = 0; i < BOATS.length; i++) {
+      const b = selectBoat(i);
+      const drive = b.driveKeys[0];
+      const fresh = (o) => {
+        const s = makeState(Object.assign({ X: 0, Y: 0, hdg: 0, drive }, o));
+        s.testMode = true;
+        return s;
+      };
+      // top speed against her theoretical hull speed
+      let S = fresh({});
+      engage(S, 1);
+      for (let k = 0; k < 200 / DT; k++) stepSim(S, TEST_ENV, DT, null);
+      const hull = 1.34 * Math.sqrt(b.BOAT.lwl * 3.28084);
+      const frac = toKn(S.u) / hull;
+      worstHull = Math.min(worstHull, frac);
+      if (b.def.anchor) anchorTop = toKn(S.u);
+      if (frac > 0.98) worstHull = -1;             // absurdly fast: flag it
+
+      // prop walk astern must be to port, i.e. bow to starboard
+      S = fresh({});
+      engage(S, -1);
+      for (let k = 0; k < 5 / DT; k++) stepSim(S, TEST_ENV, DT, null);
+      minWalk = Math.min(minWalk, hdgDelta(S, 0));
+
+      // she must answer the helm at 2 kn astern
+      S = fresh({});
+      S.u = -2 * KN;
+      S.delta = S.deltaCmd = HELM.maxAngle;
+      engage(S, -0.45);
+      for (let k = 0; k < 6 / DT; k++) { S.deltaCmd = HELM.maxAngle; stepSim(S, TEST_ENV, DT, null); }
+      worstCtrl = Math.max(worstCtrl, hdgDelta(S, 0));   // must stay negative
+
+      // leeway in 15 kn on the beam
+      S = fresh({});
+      for (let k = 0; k < 12 / DT; k++) {
+        stepSim(S, { windSpeed: 15 * KN, windDir: 90 * RAD, gustiness: 0,
+                     tideRate: 0, timeCompression: 20 }, DT, null);
+      }
+      const lee = toKn(hypot(S.u, S.v));
+      minLee = Math.min(minLee, lee); maxLee = Math.max(maxLee, lee);
+
+      // turning circle under power
+      S = fresh({});
+      engage(S, 0.42);
+      for (let k = 0; k < 70 / DT; k++) stepSim(S, TEST_ENV, DT, null);
+      for (let k = 0; k < 60 / DT; k++) { S.deltaCmd = HELM.maxAngle; stepSim(S, TEST_ENV, DT, null); }
+      const dia = 2 * hypot(S.u, S.v) / Math.max(Math.abs(S.r), 1e-4) / b.BOAT.loa;
+      minTurn = Math.min(minTurn, dia); maxTurn = Math.max(maxTurn, dia);
+    }
+    selectBoat(ANCHOR_BOAT);
+
+    vals["slowest boat, as a fraction of her hull speed"] = [worstHull, 0.90, 0.08, ""];
+    vals["every boat walks her stern to PORT (least swing)"] = [minWalk, 6, 6, "deg"];
+    vals["every boat answers the helm at 2 kn astern (worst)"] = [worstCtrl, -13, 8, "deg"];
+    vals["leeway in 15 kn: least"] = [minLee, 0.85, 0.3, "kn"];
+    vals["leeway in 15 kn: most"] = [maxLee, 0.95, 0.3, "kn"];
+    vals["tightest turning circle"] = [minTurn, 1.9, 0.6, "L"];
+    vals["widest turning circle"] = [maxTurn, 2.05, 0.7, "L"];
+    // The anchor must not have moved.
+    vals["the 40.1 is still exactly where the other tests left her"] =
+      [anchorTop, 7.19, 0.05, "kn"];
+    return { vals };
+  },
+},
+];
+
+function runSelfTest() {
+  const rows = [];
+  let pass = 0, fail = 0;
+  // Every test below except the fleet one is written against the 40.1, which is
+  // the boat the coefficients were tuned on. Pin her, whatever was selected.
+  selectBoat(ANCHOR_BOAT);
+  for (const t of TESTS) {
+    let res;
+    try { res = t.run(); }
+    catch (e) { rows.push({ t, error: String(e && e.stack || e) }); fail++; continue; }
+    const checks = [];
+    let ok = true;
+    for (const [label, [actual, expect, tol, unit]] of Object.entries(res.vals)) {
+      const good = isFinite(actual) && Math.abs(actual - expect) <= tol;
+      if (!good) ok = false;
+      checks.push({ label, actual, expect, tol, unit, good });
+    }
+    rows.push({ t, checks, ok });
+    ok ? pass++ : fail++;
+  }
+  return { rows, pass, fail };
+}
+
+/* Exposed so the acceptance suite can also be driven from node during tuning. */
+if (typeof window !== "undefined") {
+  window.SSIM = { runSelfTest, TESTS, simulate, engage, makeState, stepSim, computeForces,
+                  newAcc, WORLD, DT, KN, toKn, trueWind, currentAt,
+                  FOIL, HELM, ENGINE, LINE, CONTACT, AERO_COMMON,
+                  foilCoeffs, bodyToWorld, worldToBody, TEST_ENV,
+                  throwLine, warpLine, makeFastAlongside, nearestEdge, SOLIDS, depthAt, DRILLS,
+                  BOATS, BOAT_DEFS, buildBoat, selectBoat, ANCHOR_BOAT };
+  // The per-boat tables are `let` bindings that selectBoat() repoints, so they
+  // have to be read through getters or a tuning script would silently keep
+  // poking at whichever boat happened to be selected when this ran.
+  for (const k of ["BOAT", "PANELS", "HULL", "DRIVES", "THRUSTERS", "WINDAGE",
+                   "WIND_PANELS", "CLEATS", "HULL_POLY", "HULL_RADIUS",
+                   "FENDERS", "KEEL_FOOT", "RUDDER_FOOT", "DRIVE_KEYS",
+                   "boatIndex"]) {
+    Object.defineProperty(window.SSIM, k, {
+      enumerable: true,
+      get: () => ({ BOAT, PANELS, HULL, DRIVES, THRUSTERS, WINDAGE, WIND_PANELS,
+                    CLEATS, HULL_POLY, HULL_RADIUS, FENDERS, KEEL_FOOT,
+                    RUDDER_FOOT, DRIVE_KEYS, boatIndex })[k],
+    });
+  }
+}
+
+/* ==========================================================================
+   §12  RENDER — north-up chart view
+   ========================================================================== */
+
+const cv = document.getElementById("world");
+const cx2 = cv.getContext("2d");
+
+/* roundRect is recent. If it is missing, a single throw inside the draw would
+   kill the whole loop, so fall back to a plain rectangle rather than risk it. */
+if (cx2 && typeof cx2.roundRect !== "function") {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h) {
+    this.rect(x, y, w, h);
+    return this;
+  };
+}
+
+const COL = {
+  water: "#0d2b3e", grid: "#17405a", land: "#3a3527", landEdge: "#5b5340",
+  building: "#4a4436", pontoon: "#77828a", pontoonEdge: "#98a5ad",
+  piling: "#8a6b3f", neighbour: "#3f5666", neighbourEdge: "#5f7787",
+  hull: "#f2f6f8", hullEdge: "#0a1c28", deck: "#c9d4da",
+  bollard: "#8ea3b0", bollardHot: "#ffb454",
+  taut: "#ffb454", slack: "#4d6373", trail: "#2f6a8c", target: "#30a46c",
+};
+const COL_PORT = "#e5484d", COL_STBD = "#30a46c";
+
+function poly(pts, fill, stroke, lw) {
+  cx2.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const s = w2s(pts[i][0], pts[i][1]);
+    i ? cx2.lineTo(s.x, s.y) : cx2.moveTo(s.x, s.y);
+  }
+  cx2.closePath();
+  if (fill)   { cx2.fillStyle = fill; cx2.fill(); }
+  if (stroke) { cx2.strokeStyle = stroke; cx2.lineWidth = lw || 1; cx2.stroke(); }
+}
+
+function drawArrow(X, Y, vx, vy, col, label) {
+  const a = w2s(X, Y), b = w2s(X + vx, Y + vy);
+  const dx = b.x - a.x, dy = b.y - a.y, len = hypot(dx, dy);
+  if (len < 3) return;
+  cx2.strokeStyle = col; cx2.fillStyle = col; cx2.lineWidth = 2;
+  cx2.beginPath(); cx2.moveTo(a.x, a.y); cx2.lineTo(b.x, b.y); cx2.stroke();
+  const ux = dx / len, uy = dy / len, h = Math.min(9, len * 0.45);
+  cx2.beginPath();
+  cx2.moveTo(b.x, b.y);
+  cx2.lineTo(b.x - ux * h - uy * h * 0.5, b.y - uy * h + ux * h * 0.5);
+  cx2.lineTo(b.x - ux * h + uy * h * 0.5, b.y - uy * h - ux * h * 0.5);
+  cx2.fill();
+  if (label && cam.scale > 2) {
+    cx2.font = "10px ui-monospace, monospace";
+    cx2.fillText(label, b.x + ux * 4 + 3, b.y + uy * 4);
+  }
+}
+
+/* The tidal stream as a faint field of arrows. Seeing where the stream runs
+   hard — and where it runs backwards behind the breakwater head — is half of
+   knowing how to get in. */
+function drawTide(env) {
+  if (Math.abs(env.tideRate) < 0.02) return;
+  cx2.strokeStyle = "rgba(90,170,215,0.30)";
+  cx2.fillStyle = "rgba(90,170,215,0.30)";
+  cx2.lineWidth = 1;
+  const b = WORLD.bounds, step = 14;
+  for (let X = b.x0; X < b.x1; X += step) {
+    for (let Y = b.y0; Y < b.y1; Y += step) {
+      const s = w2s(X, Y);
+      if (s.x < -20 || s.y < -20 || s.x > innerWidth + 20 || s.y > innerHeight + 20) continue;
+      const c = currentAt(X, Y, env.tideRate);
+      const m = hypot(c.x, c.y);
+      if (m < 0.03) continue;
+      const e = w2s(X + c.x * 17, Y + c.y * 17);
+      cx2.beginPath(); cx2.moveTo(s.x, s.y); cx2.lineTo(e.x, e.y); cx2.stroke();
+      cx2.beginPath(); cx2.arc(e.x, e.y, 1.6, 0, 7); cx2.fill();
+    }
+  }
+}
+
+function drawWorld(S, env) {
+  cx2.setTransform(cam.dpr, 0, 0, cam.dpr, 0, 0);
+  cx2.fillStyle = COL.water;
+  cx2.fillRect(0, 0, innerWidth, innerHeight);
+
+  if (cam.scale > 1.2) {                      // 10 m grid
+    cx2.strokeStyle = COL.grid; cx2.lineWidth = 1; cx2.globalAlpha = 0.5;
+    const b = WORLD.bounds;
+    cx2.beginPath();
+    for (let X = Math.ceil(b.x0 / 10) * 10; X < b.x1; X += 10) {
+      const a = w2s(X, b.y0), c = w2s(X, b.y1);
+      cx2.moveTo(a.x, a.y); cx2.lineTo(c.x, c.y);
+    }
+    for (let Y = Math.ceil(b.y0 / 10) * 10; Y < b.y1; Y += 10) {
+      const a = w2s(b.x0, Y), c = w2s(b.x1, Y);
+      cx2.moveTo(a.x, a.y); cx2.lineTo(c.x, c.y);
+    }
+    cx2.stroke(); cx2.globalAlpha = 1;
+  }
+
+  for (const s of WORLD.shoals) {             // shoal water
+    const c = w2s(s.x, s.y), r = s.r * cam.scale;
+    const g = cx2.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+    g.addColorStop(0, "rgba(32,96,128,0.9)");
+    g.addColorStop(1, "rgba(32,96,128,0)");
+    cx2.fillStyle = g;
+    cx2.beginPath(); cx2.arc(c.x, c.y, r, 0, 7); cx2.fill();
+  }
+
+  drawTide(env);
+
+  for (const l of WORLD.land)      poly(l.pts, COL.land, COL.landEdge, 1.5);
+  for (const b of WORLD.buildings) poly(b.pts, COL.building, COL.landEdge, 1.5);
+  for (const p of WORLD.pontoons)  poly(p.pts, COL.pontoon, COL.pontoonEdge, 1);
+
+  for (const p of WORLD.pilings) {
+    const c = w2s(p.x, p.y);
+    cx2.fillStyle = COL.piling;
+    cx2.beginPath(); cx2.arc(c.x, c.y, Math.max(2, p.r * cam.scale), 0, 7); cx2.fill();
+  }
+
+  for (const m of WORLD.mooredBoats) {
+    const pts = makeHullPoly(m.loa, m.beam).map(([x, y]) => {
+      const wv = bodyToWorld(x, y, m.psi);
+      return [m.x + wv.x, m.y + wv.y];
+    });
+    poly(pts, COL.neighbour, COL.neighbourEdge, 1);
+  }
+
+  const d = DRILLS[curDrill];                 // where you are trying to get to
+  const tgt = d.target && (d.target.berth || d.target.alongside);
+  if (tgt) {
+    const c = w2s(tgt[0], tgt[1]);
+    cx2.strokeStyle = COL.target; cx2.lineWidth = 2; cx2.setLineDash([6, 5]);
+    cx2.beginPath(); cx2.arc(c.x, c.y, d.target.tol * cam.scale, 0, 7); cx2.stroke();
+    cx2.setLineDash([]);
+  }
+
+  /* Bollards. The ones you could actually reach light up, which saves a lot of
+     squinting at numbers while you have other things to worry about. */
+  const reach = [];
+  for (const ln of S.lines) {
+    for (const cn of ln.cleatOptions) {
+      const cl = CLEATS[cn], cw = bodyToWorld(cl.x, cl.y, S.psi);
+      reach.push([S.X + cw.x, S.Y + cw.y]);
+    }
+  }
+  cx2.font = "bold 10px ui-monospace, monospace";
+  cx2.textAlign = "center"; cx2.textBaseline = "middle";
+  for (const b of WORLD.bollards) {
+    const c = w2s(b.x, b.y);
+    if (c.x < -30 || c.y < -30 || c.x > innerWidth + 30 || c.y > innerHeight + 30) continue;
+    let hot = false;
+    for (const [rx, ry] of reach) {
+      if (hypot(b.x - rx, b.y - ry) <= LINE.rangeMax) { hot = true; break; }
+    }
+    const rr = Math.max(2.5, 0.42 * cam.scale);
+    cx2.fillStyle = hot ? COL.bollardHot : COL.bollard;
+    cx2.beginPath(); cx2.arc(c.x, c.y, rr, 0, 7); cx2.fill();
+    if (cam.scale > 2.2) {
+      cx2.fillStyle = hot ? "#ffd9a0" : "rgba(200,220,232,0.7)";
+      cx2.fillText(String(b.n), c.x, c.y - rr - 6);
+    }
+  }
+  cx2.textAlign = "left"; cx2.textBaseline = "alphabetic";
+}
+
+function drawTrail(S) {
+  if (!aids.trail || S.trail.length < 2) return;
+  cx2.strokeStyle = COL.trail; cx2.lineWidth = 1.5;
+  cx2.beginPath();
+  for (let i = 0; i < S.trail.length; i++) {
+    const s = w2s(S.trail[i][0], S.trail[i][1]);
+    i ? cx2.lineTo(s.x, s.y) : cx2.moveTo(s.x, s.y);
+  }
+  cx2.stroke();
+  /* Heading ticks along the track. The angle between where she is pointing and
+     where she is actually going is the crab angle, and seeing it is the point. */
+  cx2.strokeStyle = "rgba(120,190,230,0.45)"; cx2.lineWidth = 1;
+  for (let i = 0; i < S.trail.length; i += 10) {
+    const t = S.trail[i], a = w2s(t[0], t[1]);
+    const hv = bodyToWorld(2.4, 0, t[2]);
+    const b = w2s(t[0] + hv.x, t[1] + hv.y);
+    cx2.beginPath(); cx2.moveTo(a.x, a.y); cx2.lineTo(b.x, b.y); cx2.stroke();
+  }
+}
+
+function drawLines(S) {
+  for (const ln of S.lines) {
+    if (ln.bollard == null) continue;
+    const b = bollardByNumber(ln.bollard);
+    if (!b) continue;
+    const cl = CLEATS[ln.cleat], cw = bodyToWorld(cl.x, cl.y, S.psi);
+    const a = w2s(S.X + cw.x, S.Y + cw.y), e = w2s(b.x, b.y);
+    if (ln.taut) {
+      cx2.strokeStyle = COL.taut;
+      cx2.lineWidth = clamp(1.2 + ln.tension / 2500, 1.2, 5);
+      cx2.beginPath(); cx2.moveTo(a.x, a.y); cx2.lineTo(e.x, e.y); cx2.stroke();
+    } else {
+      // A slack line should look slack — that is information you want.
+      cx2.strokeStyle = COL.slack; cx2.lineWidth = 1.4;
+      const mx = (a.x + e.x) / 2, my = (a.y + e.y) / 2;
+      const sag = clamp((ln.L0 - (ln.length || 0)) * cam.scale * 0.7 + 4, 4, 30);
+      cx2.beginPath(); cx2.moveTo(a.x, a.y);
+      cx2.quadraticCurveTo(mx, my + sag, e.x, e.y); cx2.stroke();
+    }
+  }
+}
+
+function drawBoat(S) {
+  const bw = (bx, by) => {
+    const w = bodyToWorld(bx, by, S.psi);
+    return w2s(S.X + w.x, S.Y + w.y);
+  };
+  poly(HULL_POLY.map(([x, y]) => {
+    const w = bodyToWorld(x, y, S.psi);
+    return [S.X + w.x, S.Y + w.y];
+  }), COL.hull, COL.hullEdge, 1.5);
+
+  if (cam.scale > 1.8) {
+    const shape = (pts, fill) => {
+      cx2.fillStyle = fill; cx2.beginPath();
+      pts.forEach(([x, y], i) => { const p = bw(x, y); i ? cx2.lineTo(p.x, p.y) : cx2.moveTo(p.x, p.y); });
+      cx2.closePath(); cx2.fill();
+    };
+    shape([[3.6, 0.9], [0.4, 1.25], [-1.6, 1.2], [-1.6, -1.2], [0.4, -1.25], [3.6, -0.9]], COL.deck);
+    shape([[-2.0, 1.0], [-5.0, 1.05], [-5.0, -1.05], [-2.0, -1.0]], "#8fa2ac");
+  }
+
+  if (cam.scale > 2.2) {                      // fenders, where you hung them
+    cx2.fillStyle = "#d9ba7a";
+    for (const fx of FENDERS) {
+      for (const side of [-1, 1]) {
+        const p = bw(fx, side * (BOAT.beam / 2 - 0.05));
+        cx2.beginPath(); cx2.arc(p.x, p.y, Math.max(1.6, 0.18 * cam.scale), 0, 7); cx2.fill();
+      }
+    }
+  }
+
+  const m = bw(1.6, 0);                       // mast
+  cx2.fillStyle = "#1a2b34";
+  cx2.beginPath(); cx2.arc(m.x, m.y, Math.max(1.8, 0.22 * cam.scale), 0, 7); cx2.fill();
+
+  /* The rudder blade at its actual angle. A small thing, but it makes the "the
+     helm is doing absolutely nothing" moments legible instead of mysterious.
+
+     The blade hangs AFT of the stock, and positive delta is helm to starboard,
+     which swings the blade's trailing edge to STARBOARD (+y) — the stern then
+     kicks to port and the bow comes round to starboard. Getting this sign wrong
+     draws the blade on the wrong side of the boat and makes every force arrow
+     around the stern look like it is fighting the helm. */
+  const rootB = bodyToWorld(BOAT.x_rud, 0, S.psi);
+  const tipB  = bodyToWorld(BOAT.x_rud - 1.15 * Math.cos(S.delta),
+                            +1.15 * Math.sin(S.delta), S.psi);
+  const r0 = w2s(S.X + rootB.x, S.Y + rootB.y);
+  const r1 = w2s(S.X + tipB.x, S.Y + tipB.y);
+  cx2.strokeStyle = "#e5484d"; cx2.lineWidth = 2.5;
+  cx2.beginPath(); cx2.moveTo(r0.x, r0.y); cx2.lineTo(r1.x, r1.y); cx2.stroke();
+}
+
+/* The force overlay. This is the thing that makes prop walk click: engage
+   astern and a sideways arrow appears at the propeller pointing to port, with
+   nothing at all at the rudder. */
+function drawForces(S, dbg) {
+  if (!aids.forces || !dbg) return;
+  const K = 1 / 260;                          // metres of arrow per newton
+  const at = (bx) => {
+    const w = bodyToWorld(bx, 0, S.psi);
+    return [S.X + w.x, S.Y + w.y];
+  };
+  const lat = (x, Y, col, label) => {
+    if (!Y || Math.abs(Y) < 25) return;
+    const p = at(x), v = bodyToWorld(0, Y * K, S.psi);
+    drawArrow(p[0], p[1], v.x, v.y, col, label);
+  };
+  const drv = DRIVES[S.drive];
+  if (Math.abs(S._T) > 25) {
+    const p = at(drv.x_prop), v = bodyToWorld(S._T * K, 0, S.psi);
+    drawArrow(p[0], p[1], v.x, v.y, "#30a46c", S._T > 0 ? "thrust" : "thrust astern");
+  }
+  if (dbg.propwalk)    lat(dbg.propwalk.x, dbg.propwalk.Y, "#e5484d", "PROP WALK");
+  if (dbg.wash)        lat(dbg.wash.x, dbg.wash.Y, "#a78bfa", "wash");
+  if (dbg.rudderFree)  lat(BOAT.x_rud, dbg.rudderFree.Fy, "#c4b5fd", "rudder");
+  if (dbg.bowThrust)   lat(dbg.bowThrust.x, dbg.bowThrust.Y, "#22d3ee", "bow thr");
+  if (dbg.sternThrust) lat(dbg.sternThrust.x, dbg.sternThrust.Y, "#22d3ee", "stern thr");
+  if (dbg.wind)        lat(dbg.wind.x, dbg.wind.Y, "#facc15", "wind");
+
+  /* THE PIVOT POINT — the crosshair that slides up and down her centreline.
+
+     It marks the one point on the boat with no sideways motion at all: the point
+     she is, at this instant, turning about. Everything forward of it swings one
+     way, everything aft of it swings the other, and the further a point is from
+     it the faster that end sweeps.
+
+     It is worth watching because it MOVES, and because it explains the two
+     things that catch people out. Making way ahead it sits roughly a third back
+     from the bow, so your stern swings wide — which is what puts your quarter
+     into the boat behind as you pull out. Going astern it moves aft, close to
+     the stern, so it is your BOW that scythes across the fairway.
+
+     Nothing in the physics reads this value; it is derived from the motion
+     (x = -v/r) purely to be shown. Hidden when she is barely turning, or when it
+     runs off beyond her ends, where it stops telling you anything useful. */
+  const turning = Math.abs(S.r) > 0.010;      // about half a degree a second
+  const xp = turning ? -S.v / S.r : 0;
+  if (turning && Math.abs(xp) < BOAT.loa * 0.9) {
+    const p = at(xp);
+    const s = w2s(p[0], p[1]);
+    cx2.strokeStyle = "#ffb454"; cx2.lineWidth = 1.5;
+    cx2.beginPath(); cx2.arc(s.x, s.y, 5, 0, 7); cx2.stroke();
+    cx2.beginPath();
+    cx2.moveTo(s.x - 9, s.y); cx2.lineTo(s.x + 9, s.y);
+    cx2.moveTo(s.x, s.y - 9); cx2.lineTo(s.x, s.y + 9);
+    cx2.stroke();
+    if (cam.scale > 2) {
+      cx2.fillStyle = "#ffb454";
+      cx2.font = "10px ui-monospace, monospace";
+      cx2.fillText("pivot", s.x + 12, s.y - 7);
+    }
+  }
+}
+
+/* Rudder angle and throttle, drawn right beside the boat.
+
+   The panel bottom-left has the same information, but in close quarters your
+   eyes are on the boat and the pontoon, not down in the corner. These ride with
+   her, just clear of the hull.
+
+   The rudder strip is screen-aligned and labelled P and S, exactly like a
+   bulkhead rudder-angle indicator, rather than rotating with the boat — the
+   alternative reads upside down whenever she is heading south. Both strips have
+   a yellow centre mark, matching the yellow king-spoke on the wheel, so
+   "everything lined up with the yellow" means amidships and in neutral. */
+function drawBoatIndicators(S) {
+  const c = w2s(S.X, S.Y);
+  // Below the hull, and below the force arrows, which radiate from her middle.
+  const clear = clamp(HULL_RADIUS * cam.scale + 16, 32, 86);
+  const HW = 40;                                  // half width of the strips
+
+  cx2.save();
+  cx2.font = "10px ui-monospace, monospace";
+  cx2.textBaseline = "middle";
+
+  // ---------- rudder: horizontal strip, centred under her ----------
+  const ry = clamp(c.y + clear, 30, innerHeight - 150);
+  const rx = clamp(c.x, HW + 20, innerWidth - HW - 96);
+  cx2.fillStyle = "rgba(6,20,30,0.72)";
+  cx2.strokeStyle = "rgba(140,190,220,0.3)";
+  cx2.lineWidth = 1;
+  cx2.beginPath();
+  cx2.roundRect(rx - HW, ry - 5, HW * 2, 10, 5);
+  cx2.fill(); cx2.stroke();
+
+  const frac = clamp(S.delta / HELM.maxAngle, -1, 1);
+  if (Math.abs(frac) > 0.012) {
+    cx2.fillStyle = frac > 0 ? COL_STBD : COL_PORT;
+    const w = frac * (HW - 4);
+    cx2.beginPath();
+    cx2.roundRect(rx + Math.min(0, w), ry - 3, Math.abs(w), 6, 3);
+    cx2.fill();
+  }
+  cx2.strokeStyle = COL.bollardHot;               // the amidships mark
+  cx2.lineWidth = 2;
+  cx2.beginPath(); cx2.moveTo(rx, ry - 7); cx2.lineTo(rx, ry + 7); cx2.stroke();
+
+  cx2.fillStyle = "rgba(180,205,220,0.75)";
+  cx2.textAlign = "right"; cx2.fillText("P", rx - HW - 5, ry);
+  cx2.textAlign = "left";  cx2.fillText("S", rx + HW + 5, ry);
+
+  const dDeg = Math.abs(toDeg(S.delta));
+  cx2.textAlign = "center";
+  cx2.fillStyle = dDeg < 0.5 ? COL.bollardHot : "#dce8ef";
+  cx2.fillText(dDeg < 0.5 ? "amidships"
+    : `${dDeg.toFixed(0)}°${S.delta > 0 ? "S" : "P"}`, rx, ry + 16);
+
+  // ---------- throttle: vertical strip, alongside the rudder strip ----------
+  const tx = rx + HW + 22;
+  const ty = ry;
+  const TH = 21;
+  cx2.fillStyle = "rgba(6,20,30,0.72)";
+  cx2.strokeStyle = "rgba(140,190,220,0.3)";
+  cx2.lineWidth = 1;
+  cx2.beginPath();
+  cx2.roundRect(tx - 5, ty - TH, 10, TH * 2, 5);
+  cx2.fill(); cx2.stroke();
+
+  if (Math.abs(S.lever) > 0.005) {
+    // Hollow while the gearbox is still taking it up, solid once she is in gear:
+    // that pause is a real constraint and worth being able to see.
+    const h = S.lever * (TH - 4);
+    const engaging = S.gearTimer > 0 || S.gear === 0;
+    cx2.beginPath();
+    cx2.roundRect(tx - 3, ty - Math.max(0, h), 6, Math.abs(h), 3);
+    if (engaging) {
+      cx2.strokeStyle = S.lever > 0 ? COL_STBD : COL.bollardHot;
+      cx2.lineWidth = 1.5; cx2.stroke();
+    } else {
+      cx2.fillStyle = S.lever > 0 ? COL_STBD : COL.bollardHot;
+      cx2.fill();
+    }
+  }
+  cx2.strokeStyle = COL.bollardHot;               // the neutral mark
+  cx2.lineWidth = 2;
+  cx2.beginPath(); cx2.moveTo(tx - 7, ty); cx2.lineTo(tx + 7, ty); cx2.stroke();
+
+  cx2.fillStyle = "rgba(180,205,220,0.75)";
+  cx2.textAlign = "center";
+  cx2.fillText("A", tx, ty - TH - 9);
+  cx2.fillText("R", tx, ty + TH + 9);
+
+  cx2.textAlign = "left";
+  const pct = Math.round(Math.abs(S.lever) * 100);
+  cx2.fillStyle = S.gearTimer > 0 ? COL.bollardHot
+    : S.gear === 0 ? "rgba(180,205,220,0.75)" : "#dce8ef";
+  const label = S.gearTimer > 0 ? "engaging"
+    : S.lever === 0 ? "neutral"
+    : `${S.gear === 0 ? "" : S.lever > 0 ? "ahd " : "ast "}${pct}%`;
+  cx2.fillText(label, tx + 11, ty);
+  cx2.restore();
+}
+
+/* Wind and tide arrows, pinned to the screen rather than to the world. */
+function drawCompass(S, env) {
+  const ox = innerWidth - 300, oy = 96, R = 34;
+  cx2.strokeStyle = "rgba(150,190,215,0.3)"; cx2.lineWidth = 1;
+  cx2.beginPath(); cx2.arc(ox, oy, R, 0, 7); cx2.stroke();
+  cx2.fillStyle = "rgba(180,210,230,0.7)";
+  cx2.font = "9px ui-monospace, monospace"; cx2.textAlign = "center";
+  cx2.fillText("N", ox, oy - R - 5);
+
+  const W = trueWind(S, env), ws = hypot(W.x, W.y);
+  if (ws > 0.2) {
+    const ux = W.x / ws, uy = -W.y / ws;      // the way the air is travelling
+    cx2.strokeStyle = "#facc15"; cx2.fillStyle = "#facc15"; cx2.lineWidth = 2.5;
+    cx2.beginPath();
+    cx2.moveTo(ox - ux * R, oy - uy * R);
+    cx2.lineTo(ox + ux * R * 0.6, oy + uy * R * 0.6);
+    cx2.stroke();
+    cx2.beginPath(); cx2.arc(ox + ux * R * 0.72, oy + uy * R * 0.72, 3.5, 0, 7); cx2.fill();
+    cx2.fillText(toKn(ws).toFixed(0) + " kn", ox, oy + R + 13);
+  }
+  const c = currentAt(S.X, S.Y, env.tideRate), cs = hypot(c.x, c.y);
+  if (cs > 0.02) {
+    const ux = c.x / cs, uy = -c.y / cs;
+    cx2.strokeStyle = "#5aaad7"; cx2.fillStyle = "#5aaad7"; cx2.lineWidth = 2;
+    cx2.beginPath();
+    cx2.moveTo(ox - ux * R * 0.5, oy - uy * R * 0.5);
+    cx2.lineTo(ox + ux * R * 0.92, oy + uy * R * 0.92);
+    cx2.stroke();
+    cx2.fillText(toKn(cs).toFixed(1) + " kn", ox, oy + R + 25);
+  }
+  cx2.textAlign = "left";
+}
+
+/* Scale bar. Judging distance is the whole skill, so give it a reference. */
+function drawScale() {
+  let m = 5;
+  for (const c of [5, 10, 20, 25, 50, 100]) if (c * cam.scale < 130) m = c;
+  // Clear of the helm panel bottom-left and the coach panel bottom-centre.
+  const px = m * cam.scale, x = 340, y = innerHeight - 24;
+  cx2.strokeStyle = "rgba(200,225,240,0.6)"; cx2.lineWidth = 1.5;
+  cx2.beginPath();
+  cx2.moveTo(x, y - 4); cx2.lineTo(x, y); cx2.lineTo(x + px, y); cx2.lineTo(x + px, y - 4);
+  cx2.stroke();
+  cx2.fillStyle = "rgba(200,225,240,0.75)";
+  cx2.font = "10px ui-monospace, monospace";
+  cx2.fillText(m + " m", x + px / 2 - 9, y - 7);
+}
+
+/* ==========================================================================
+   §13  INPUT
+   ========================================================================== */
+
+const keys = Object.create(null);
+const aids = { forces: true, trail: true, coach: true, debrief: true };
+let paused = false, slowmo = false;
+const el = (id) => document.getElementById(id);
+
+addEventListener("keydown", (e) => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // Don't steer the boat while a panel control has the keyboard.
+  const tag = e.target && e.target.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (k === "Escape") {
+    if (pending.digits) { pending = { digits: "", t: 0 }; return; }   // abandon the number
+    el("p-debrief").style.display = "none";
+  }
+  // The arrows are flight controls here, so stop them scrolling a panel.
+  if (k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown") {
+    e.preventDefault();
+  }
+  if (keys[k]) return;                        // ignore auto-repeat
+  keys[k] = true;
+  if (k === "Shift") slowmo = true;
+  switch (k) {
+    case " ": boat.lever = 0; e.preventDefault(); break;
+    case "x": boat.deltaCmd = 0; break;
+    case "z": boat.selLine = (boat.selLine + 2) % 3; break;
+    case "c": boat.selLine = (boat.selLine + 1) % 3; break;
+    case "f": aids.forces = !aids.forces; syncAidButtons(); break;
+    case "t": aids.trail  = !aids.trail;  syncAidButtons(); break;
+    case "p": paused = !paused; break;
+    case "r": startDrill(curDrill); break;
+    case "m": say(makeFastAlongside(boat)); break;
+    case "h": {
+      const hp = el("help");
+      hp.style.display = hp.style.display === "block" ? "none" : "block";
+      break;
+    }
+    case "Backspace": {
+      const ln = boat.lines[boat.selLine];
+      if (ln.bollard != null) { ln.bollard = null; say("slipped the " + ln.name + " line"); }
+      e.preventDefault();
+      break;
+    }
+    case "Enter": {
+      const ln = boat.lines[boat.selLine];
+      if (ln.bollard != null && !ln.madeFast) {
+        ln.madeFast = true;
+        say(ln.name + " line made fast — you can haul on it now");
+      }
+      break;
+    }
+  }
+  if (k >= "0" && k <= "9") { pushThrowDigit(k); e.preventDefault(); }
+  if (k === "g") throwNearest();
+});
+addEventListener("keyup", (e) => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  keys[k] = false;
+  if (k === "Shift") slowmo = false;
+});
+
+/* ---- choosing a bollard -------------------------------------------------
+   The marina has 47 numbered bollards, so a single keypress cannot name one.
+   Digits are dialled instead: they accumulate, and the throw happens as soon as
+   the number can only mean one bollard ("21" can only be 21, so it goes at
+   once) or after a short pause when it is still ambiguous ("4" might yet become
+   40 to 47, so it waits). That way two-digit bollards need no extra keystroke
+   and single-digit ones need only a moment.
+
+   There are two easier ways as well: click the bollard on the chart, or press G
+   to throw to whichever one is nearest — which is what you would actually do
+   on a boat, where you throw to what you can reach and never to a number. */
+const BOLLARD_KEYS = new Set(WORLD.bollards.map((b) => String(b.n)));
+const THROW_DIAL_MS = 650;
+let pending = { digits: "", t: 0 };
+
+function dialState(s) {
+  let longer = false;
+  for (const n of BOLLARD_KEYS) {
+    if (n.length > s.length && n.startsWith(s)) { longer = true; break; }
+  }
+  return { exact: BOLLARD_KEYS.has(s), longer };
+}
+
+function pushThrowDigit(d) {
+  let s = pending.digits + d;
+  let st = dialState(s);
+  if (!st.exact && !st.longer) {
+    // Dead end — treat the keypress as the start of a fresh number instead.
+    s = d;
+    st = dialState(s);
+    if (!st.exact && !st.longer) {
+      pending = { digits: "", t: 0 };
+      say(`there is no bollard ${d}`);
+      return;
+    }
+  }
+  pending = { digits: s, t: perfNow };
+  if (st.exact && !st.longer) flushThrow();
+}
+
+function flushThrow() {
+  if (!pending.digits) return;
+  const n = Number(pending.digits);
+  pending = { digits: "", t: 0 };
+  say(throwLine(boat, boat.selLine, n));
+}
+
+/* Throw to the nearest bollard the selected line can actually reach. */
+function throwNearest() {
+  const ln = boat.lines[boat.selLine];
+  let best = null;
+  for (const cn of ln.cleatOptions) {
+    const cl = CLEATS[cn], cw = bodyToWorld(cl.x, cl.y, boat.psi);
+    const nb = nearestBollard(boat.X + cw.x, boat.Y + cw.y, LINE.rangeMax);
+    if (nb && (!best || nb.dist < best.dist)) best = nb;
+  }
+  pending = { digits: "", t: 0 };
+  say(best ? throwLine(boat, boat.selLine, best.bollard.n)
+           : `nothing within ${LINE.rangeMax} m of your ${ln.name} cleat`);
+}
+
+/* Which numbered bollard is under the pointer, if any. */
+function bollardAtScreen(sx, sy) {
+  let best = null, bd = 16;
+  for (const b of WORLD.bollards) {
+    const p = w2s(b.x, b.y);
+    const d = hypot(p.x - sx, p.y - sy);
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best;
+}
+
+/* Held keys, applied once per rendered frame.
+   Arrows and WASD both work: left/right is the helm, up/down is the engine. */
+function applyHeldKeys(dt) {
+  const port  = keys.a || keys.ArrowLeft;
+  const stbd  = keys.d || keys.ArrowRight;
+  const ahead = keys.w || keys.ArrowUp;
+  const astern = keys.s || keys.ArrowDown;
+  if (port) boat.deltaCmd = clamp(boat.deltaCmd - 42 * RAD * dt, -HELM.maxAngle, HELM.maxAngle);
+  if (stbd) boat.deltaCmd = clamp(boat.deltaCmd + 42 * RAD * dt, -HELM.maxAngle, HELM.maxAngle);
+  if (ahead)  boat.lever = clamp(boat.lever + 0.75 * dt, -1, 1);
+  if (astern) boat.lever = clamp(boat.lever - 0.75 * dt, -1, 1);
+  boat.bowThr.cmd   = (keys.q ? -1 : 0) + (keys.e ? 1 : 0);
+  boat.sternThr.cmd = (keys[","] ? -1 : 0) + (keys["."] ? 1 : 0);
+  const ln = boat.lines[boat.selLine];
+  // Touching a line by hand cancels any winching-in it was doing.
+  if (keys["]"]) { ln.snugTo = null; warpLine(ln, +1, dt); }
+  if (keys["["]) { ln.snugTo = null; warpLine(ln, -1, dt); }
+
+  /* Lines being brought up snug after "make fast alongside". This is ordinary
+     tension-limited winching, so it cannot snatch, and if the weather is beyond
+     what the winches can pull she simply will not come in — which is the honest
+     answer and the reason to get a line ashore early. */
+  for (const l of boat.lines) {
+    if (l.snugTo == null) continue;
+    if (l.bollard == null || boat.t > l.snugUntil) { l.snugTo = null; continue; }
+    // Keep tending it for the whole window rather than stopping the instant it
+    // first comes tight — she moves as the other lines come in, and a line that
+    // was snug a second ago goes slack again.
+    if (l.tension < l.snugTo) warpLine(l, +1, dt);
+    else if (l.tension > l.snugTo * 3) warpLine(l, -1, dt);
+    if (l.L0 <= LINE.minLength + 1e-3) l.snugTo = null;
+  }
+}
+
+/* ---- the wheel and the engine lever, as controls you can grab ----------- */
+function buildDials() {
+  let s = "";
+  for (let i = -6; i <= 6; i++) {
+    const a = (i / 6) * 150 * RAD, r0 = i % 3 === 0 ? 30 : 33;
+    s += `<line class="dial-tick${i % 3 === 0 ? " major" : ""}" x1="${(Math.sin(a) * r0).toFixed(1)}" y1="${(-Math.cos(a) * r0).toFixed(1)}" x2="${(Math.sin(a) * 38).toFixed(1)}" y2="${(-Math.cos(a) * 38).toFixed(1)}"/>`;
+  }
+  s += `<circle class="dial-face" cx="0" cy="0" r="27"/>`;
+  s += `<text class="dial-label" x="-25" y="-21">P</text><text class="dial-label" x="25" y="-21">S</text>`;
+  // Fixed index at the top, which does NOT turn with the wheel. Line the yellow
+  // king spoke up with it and the rudder is amidships.
+  s += `<path class="dial-index" d="M -4 -43.5 L 4 -43.5 L 0 -36 Z"/>`;
+  s += `<g id="wheel-spokes">`;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    // The king spoke, marked in yellow the way a real wheel is whipped or
+    // leathered, so you can find the centre without looking at a number.
+    s += `<line class="spoke${i === 0 ? " king" : ""}" x1="0" y1="0"` +
+         ` x2="${(Math.sin(a) * 24).toFixed(1)}" y2="${(-Math.cos(a) * 24).toFixed(1)}"/>`;
+  }
+  s += `<circle class="king-mark" cx="0" cy="-24" r="3.8"/>`;
+  s += `<circle cx="0" cy="0" r="3.4" fill="#e8eef2"/></g>`;
+  el("svg-wheel").innerHTML = s;
+
+  let t = `<rect class="lever-track" x="-7" y="-38" width="14" height="76" rx="7"/>`;
+  for (const [v, lab] of [[1, "A3"], [0.45, "A2"], [0.04, "A1"], [0, "N"], [-0.04, "R1"], [-0.45, "R2"], [-1, "R3"]]) {
+    const y = -v * 34;
+    t += `<line class="dial-tick${v === 0 ? " major" : ""}" x1="7" y1="${y.toFixed(1)}" x2="13" y2="${y.toFixed(1)}"/>`;
+    t += `<text class="dial-label" x="16" y="${(y + 3).toFixed(1)}" style="text-anchor:start">${lab}</text>`;
+  }
+  t += `<circle id="lever-knob" class="lever-knob" cx="0" cy="0" r="6.5"/>`;
+  el("svg-lever").innerHTML = t;
+}
+
+function dragify(svg, onValue) {
+  let active = false;
+  const handle = (ev) => {
+    const r = svg.getBoundingClientRect();
+    onValue(ev.clientX - r.left - r.width / 2, ev.clientY - r.top - r.height / 2);
+    ev.preventDefault();
+  };
+  svg.addEventListener("pointerdown", (ev) => { active = true; svg.setPointerCapture(ev.pointerId); handle(ev); });
+  svg.addEventListener("pointermove", (ev) => { if (active) handle(ev); });
+  svg.addEventListener("pointerup", (ev) => {
+    active = false;
+    try { svg.releasePointerCapture(ev.pointerId); } catch (_) {}
+  });
+}
+
+function wireDials() {
+  dragify(el("svg-wheel"), (dx, dy) => {
+    const a = Math.atan2(dx, -dy);            // 0 is straight up
+    boat.deltaCmd = clamp(a / (150 * RAD) * HELM.maxAngle, -HELM.maxAngle, HELM.maxAngle);
+  });
+  dragify(el("svg-lever"), (dx, dy) => {
+    let v = clamp(-dy / 34, -1, 1);
+    for (const d of ENGINE.detents) if (Math.abs(v - d) < 0.055) v = d;   // soft detents
+    boat.lever = v;
+  });
+
+  cv.addEventListener("wheel", (ev) => {
+    cam.targetScale = clamp(cam.targetScale * (ev.deltaY < 0 ? 1.14 : 1 / 1.14), 0.6, 14);
+    cam.manual = true;
+    ev.preventDefault();
+  }, { passive: false });
+
+  let pan = null;
+  cv.addEventListener("pointerdown", (ev) => {
+    // Clicking a bollard throws the selected line to it — much the easiest way
+    // to pick one out of forty-seven. Only then does a drag start panning.
+    const b = bollardAtScreen(ev.clientX, ev.clientY);
+    if (b) { pending = { digits: "", t: 0 }; say(throwLine(boat, boat.selLine, b.n)); return; }
+    pan = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y };
+  });
+  cv.addEventListener("pointermove", (ev) => {
+    if (!pan) return;
+    cam.follow = false;
+    cam.x = pan.cx - (ev.clientX - pan.x) / cam.scale;
+    cam.y = pan.cy + (ev.clientY - pan.y) / cam.scale;
+  });
+  cv.addEventListener("pointerup", () => { pan = null; });
+  cv.addEventListener("dblclick", () => { cam.follow = true; cam.manual = false; });
+}
+
+/* ==========================================================================
+   §14  HUD
+   ========================================================================== */
+
+const fmtKn  = (ms) => (Math.abs(toKn(ms)) < 0.05 ? "0.0" : Math.abs(toKn(ms)).toFixed(1)) + " kn";
+const fmtDeg = (r)  => wrap360(toDeg(r)).toFixed(0).padStart(3, "0") + "°";
+
+const msgLog = [];
+function say(msg) {
+  if (!msg) return;
+  msgLog.unshift({ msg, t: perfNow });
+  if (msgLog.length > 5) msgLog.pop();
+}
+
+function refreshLines(S) {
+  let h = "";
+  S.lines.forEach((ln, i) => {
+    const on = ln.bollard != null;
+    const cls = ["lrow", i === S.selLine ? "sel" : "",
+                 !on ? "none" : ln.taut ? "taut" : "slack"].join(" ");
+    const state = !on ? "not rigged"
+      : ln.snugTo != null ? "winching…"
+      : ln.taut ? (ln.tension / 1000).toFixed(2) + " kN" + (ln.slipping ? " slipping" : "")
+      : "slack";
+    h += `<div class="${cls}"><span class="nm">${ln.name}${on && ln.madeFast ? " ⚑" : ""}</span>` +
+         `<span class="bol">${on ? ln.bollard : "—"}</span>` +
+         `<span class="st">${state}</span></div>`;
+  });
+  el("line-rows").innerHTML = h;
+}
+
+function updateHud(S, env) {
+  const W = trueWind(S, env), ws = hypot(W.x, W.y);
+  const vb = bodyToWorld(S.u, S.v, S.psi);
+  const aw = worldToBody(W.x - vb.x, W.y - vb.y, S.psi);
+  const awSpd = hypot(aw.x, aw.y), awAng = toDeg(Math.atan2(-aw.y, -aw.x));
+
+  el("v-tw").textContent = `${toKn(ws).toFixed(0)} kn from ${fmtDeg(W.dir)}`;
+  el("v-aw").textContent = awSpd < 0.3 ? "—"
+    : `${toKn(awSpd).toFixed(0)} kn at ${Math.abs(awAng).toFixed(0)}° ${awAng < 0 ? "port" : "stbd"}`;
+  const c = currentAt(S.X, S.Y, env.tideRate), cs = hypot(c.x, c.y);
+  el("v-tide").textContent = cs < 0.02 ? "slack"
+    : `${toKn(cs).toFixed(1)} kn towards ${wrap360(toDeg(Math.atan2(c.x, c.y))).toFixed(0)}°`;
+
+  el("v-stw").textContent = fmtKn(hypot(S._ua, S._va));
+  el("v-sog").textContent = fmtKn(hypot(S.u, S.v));
+  el("v-hdg").textContent = fmtDeg(S.psi);
+  el("v-trk").textContent = hypot(S.u, S.v) < 0.05 ? "—"
+    : wrap360(toDeg(Math.atan2(vb.x, vb.y))).toFixed(0).padStart(3, "0") + "°";
+  const rot = toDeg(S.r);
+  el("v-rot").textContent = Math.abs(rot) < 0.1 ? "steady"
+    : `${Math.abs(rot).toFixed(1)}°/s to ${rot > 0 ? "stbd" : "port"}`;
+  const piv = Math.abs(S.r) > 0.004 ? clamp(-S.v / S.r, -20, 20) : null;
+  el("v-piv").textContent = piv == null ? "—"
+    : `${Math.abs(piv).toFixed(1)} m ${piv > 0 ? "forward" : "aft"}`;
+
+  el("v-helm").textContent = Math.abs(toDeg(S.delta)) < 0.5 ? "amidships"
+    : `${Math.abs(toDeg(S.delta)).toFixed(0)}° to ${S.delta > 0 ? "stbd" : "port"}`;
+  el("v-thr").textContent = S.lever === 0 ? "neutral"
+    : `${S.lever > 0 ? "ahead" : "astern"} ${Math.round(Math.abs(S.lever) * 100)}%`;
+  el("v-gear").textContent = S.gearTimer > 0 ? "engaging…"
+    : S.gear === 0 ? "neutral" : S.gear > 0 ? "AHEAD" : "ASTERN";
+
+  for (const which of ["bow", "stern"]) {
+    const th = S[which + "Thr"], bar = el("bar-" + which);
+    el("v-" + which).textContent = !th.fitted ? "not fitted"
+      : th.tripped ? "TRIPPED — hot" : th.cmd === 0 ? "off"
+      : th.cmd > 0 ? "to stbd" : "to port";
+    bar.firstElementChild.style.width = (clamp(th.therm, 0, 1) * 100).toFixed(0) + "%";
+    bar.className = "bar" + (th.tripped ? " tripped" : th.therm > 0.6 ? " hot" : "");
+  }
+
+  const sp = el("wheel-spokes");
+  if (sp) sp.setAttribute("transform", `rotate(${(S.delta / HELM.maxAngle * 150).toFixed(1)})`);
+  const kn = el("lever-knob");
+  if (kn) kn.setAttribute("cy", (-S.lever * 34).toFixed(1));
+
+  refreshLines(S);
+
+  // What the selected line could actually reach from here.
+  const ln = S.lines[S.selLine];
+  let best = null;
+  for (const cn of ln.cleatOptions) {
+    const cl = CLEATS[cn], cw = bodyToWorld(cl.x, cl.y, S.psi);
+    const nb = nearestBollard(S.X + cw.x, S.Y + cw.y, LINE.rangeMax);
+    if (nb && (!best || nb.dist < best.dist)) best = nb;
+  }
+  let h = `<b style="color:var(--accent)">${ln.name}</b> line selected &nbsp;<kbd>Z</kbd><kbd>C</kbd><br>`;
+  if (pending.digits) {
+    h += `throwing to bollard <b style="color:var(--accent)">${pending.digits}_</b> — ` +
+         `keep typing, or wait`;
+  } else if (best) {
+    h += `nearest in range: <b>${best.bollard.n}</b> at ${best.dist.toFixed(1)} m<br>` +
+         `<kbd>G</kbd> throw to it &nbsp; or click a bollard &nbsp; or type its number` +
+         (ln.bollard != null && !ln.madeFast ? ` &nbsp; <kbd>Enter</kbd> make fast` : "");
+  } else {
+    h += `nothing within ${LINE.rangeMax} m of that cleat yet`;
+  }
+  el("throw-hint").innerHTML = h;
+}
+
+/* ---- the coach ----------------------------------------------------------
+   Deliberately about the things that are hard to see from behind the wheel:
+   how much way she is still carrying, which way the walk is about to take her,
+   and what the wind is about to do to the bow. */
+function coachHints(S, env) {
+  const out = [];
+  const sog = toKn(hypot(S.u, S.v)), stw = toKn(hypot(S._ua, S._va));
+  const d = DRILLS[curDrill];
+  const tgt = d.target && (d.target.berth || d.target.alongside);
+
+  if (tgt) {
+    const dist = hypot(tgt[0] - S.X, tgt[1] - S.Y);
+    if (dist < 32 && sog > 1.7) out.push("Far too much way on for this range. Out of gear now and let her run off — she carries two boat lengths.");
+    else if (dist < 13 && sog > 0.9) out.push("Still too fast. A short burst astern to check her before you get in there.");
+    if (dist < 26 && dist > 8 && sog < 0.25 && S.gear === 0) out.push("You have lost all your way, and with it your steering. Give her a touch ahead.");
+  }
+  // Reverse has two phases and they want opposite advice.
+  if (S.gear < 0 || toKn(S.u) < -0.3) {
+    const sternway = -toKn(S._ua);
+    if (sternway < 1.3) {
+      out.push("Astern: her stern is walking to PORT and the helm will not stop it yet. Either use the walk or allow for it.");
+    } else {
+      out.push("You have sternway now, so the helm has bite — and going backwards the STERN follows the wheel. The walk is fading; you are steering her.");
+    }
+  }
+  if (S.gear === 0 && stw < 1.0 && Math.abs(S.delta) > 20 * RAD) {
+    out.push("Helm hard over with no way on does nothing at all. Give her a burst ahead and the wash over the blade will kick her round.");
+  }
+  const ws = toKn(hypot(trueWind(S, env).x, trueWind(S, env).y));
+  if (ws > 10) {
+    const W = trueWind(S, env);
+    const wb = worldToBody(W.x, W.y, S.psi);
+    if (wb.x < 0 && sog < 1.2) out.push("The wind is forward of the beam and it will take your bow first. Aim up-wind of where you actually want to finish.");
+    if (ws > 15) out.push("In this much breeze get a line ashore early. One line beats any amount of throttle.");
+  }
+  for (const th of [S.bowThr, S.sternThr]) {
+    if (th.fitted && th.tripped) {
+      out.push("Thruster has tripped on heat and will not be back for a few minutes. Engine and helm from here.");
+      break;
+    }
+  }
+  if (S.aground) out.push("You are aground. Astern, gently, and watch which way she slews as she comes off.");
+  return out.slice(0, 3);
+}
+
+/* ---- debrief ----------------------------------------------------------- */
+function scoreCard(S, verdict) {
+  const lines = S.lines.filter((l) => l.bollard != null);
+  const grade = (v, a, b) => (v <= a ? "ok" : v <= b ? "warn" : "bad");
+  const rows = [
+    ["time taken", `${Math.floor(S.t / 60)}:${String(Math.floor(S.t % 60)).padStart(2, "0")}`, "ok"],
+    ["hardest contact", S.contactSpeed < 0.02 ? "none at all" : `${toKn(S.contactSpeed).toFixed(2)} kn`,
+      grade(S.contactSpeed, 0.15, 0.4)],
+    ["energy absorbed", `${(S.contactEnergy / 1000).toFixed(2)} kJ`, grade(S.contactEnergy, 350, 1100)],
+    ["damage", S.damage < 60 ? "none worth mentioning"
+      : `${(S.damage / 1000).toFixed(2)} kJ worth`, grade(S.damage, 350, 1100)],
+    ["lines ashore", lines.length ? lines.map((l) => `${l.name}→${l.bollard}`).join(", ") : "none",
+      lines.length >= 2 ? "ok" : "warn"],
+  ];
+  if (S.bareContact)  rows.push(["bare hull touched", "yes — fender that spot next time", "bad"]);
+  if (S.hitNeighbour) rows.push(["hit a neighbour", "yes", "bad"]);
+  if (S.aground)      rows.push(["touched the bottom", "yes", "bad"]);
+
+  let h = `<h1>${DRILLS[curDrill].name}</h1>`;
+  h += `<div style="color:var(--ink-dim);font-size:11px;margin-bottom:9px">${DRILLS[curDrill].teaches}</div>`;
+  for (const [k, v, g] of rows) {
+    h += `<div class="row"><span class="k">${k}</span><span class="v ${g}">${v}</span></div>`;
+  }
+  h += `<div class="verdict">${verdict}</div>`;
+  h += `<div style="margin-top:10px;color:var(--ink-dim);font-size:11px">` +
+       `<kbd>R</kbd> go again &nbsp; <kbd>Esc</kbd> dismiss</div>`;
+  return h;
+}
+
+function checkDrillDone(S) {
+  const d = DRILLS[curDrill];
+  if (!d.target || S.done) return;
+  const sog = toKn(hypot(S.u, S.v));
+
+  if (d.target.turn != null) {
+    const turned = Math.abs(toDeg(wrapPi(S.psi - S.psi0)));
+    const drift = hypot(S.X - S.X0, S.Y - S.Y0);
+    if (turned >= d.target.turn - d.target.tol && sog < 0.6) {
+      finish(S, drift < BOAT.loa * 1.6
+        ? "<span class='ok'>Turned her short round inside a length and a half. That is the manoeuvre.</span>"
+        : `<span class='warn'>Round she came, but it took ${(drift / BOAT.loa).toFixed(1)} boat lengths of fairway to do it.</span>`);
+    }
+    return;
+  }
+
+  const tgt = d.target.berth || d.target.alongside;
+  const dist = hypot(tgt[0] - S.X, tgt[1] - S.Y);
+  const off = Math.abs(toDeg(wrapPi(S.psi - (d.target.heading || 0) * RAD)));
+  const nLines = S.lines.filter((l) => l.bollard != null).length;
+  if (dist <= d.target.tol && sog < 0.35 && off < 30 && nLines >= 2) {
+    let v;
+    if (S.contactSpeed < 0.15 && !S.bareContact && !S.hitNeighbour) {
+      v = "<span class='ok'>Alongside, two lines on, and you would not have spilled a drink below. Tidy.</span>";
+    } else if (S.contactSpeed < 0.4 && !S.hitNeighbour) {
+      v = "<span class='warn'>In and secure, but she landed a good deal harder than she needed to.</span>";
+    } else {
+      v = "<span class='bad'>You are in the berth. There would be a conversation about the gelcoat.</span>";
+    }
+    finish(S, v);
+  }
+}
+
+function finish(S, verdict) {
+  S.done = true;
+  if (!aids.debrief) return;
+  el("p-debrief").innerHTML = scoreCard(S, verdict);
+  el("p-debrief").style.display = "block";
+}
+
+/* ==========================================================================
+   §15  WIRING AND THE MAIN LOOP
+   ========================================================================== */
+
+let boat, env, curDrill = 0, perfNow = 0;
+const dbg = {};
+
+function startDrill(i, boatOverride) {
+  curDrill = i;
+  const d = DRILLS[i];
+  // A drill may name a boat (drill 6 is specifically about the big saildrive);
+  // otherwise you keep whichever boat you had selected.
+  const want = boatOverride != null ? boatOverride
+    : d.boat != null ? BOATS.findIndex((b) => b.def.id === d.boat)
+    : boatIndex;
+  selectBoat(want < 0 ? ANCHOR_BOAT : want);
+  boat = makeState(Object.assign({ seed: 20260814 + i * 7 }, d.start,
+                                 d.drive ? { drive: d.drive } : {}));
+  boat.psi0 = boat.psi; boat.X0 = boat.X; boat.Y0 = boat.Y;
+  env = Object.assign({ timeCompression: 20 }, d.env);
+  el("p-debrief").style.display = "none";
+  cam.x = boat.X; cam.y = boat.Y;
+  cam.follow = true; cam.manual = false;
+  cam.scale = cam.targetScale = 3.2;
+  msgLog.length = 0;
+  say(d.hint);
+  syncControls();
+}
+
+function refreshEnvLabels() {
+  el("l-wspd").textContent = `${toKn(env.windSpeed).toFixed(0)} kn`;
+  el("l-wdir").textContent = `from ${fmtDeg(env.windDir)}`;
+  el("l-gust").textContent = env.gustiness < 0.05 ? "steady"
+    : env.gustiness < 0.4 ? "slight" : env.gustiness < 0.75 ? "gusty" : "squally";
+  const t = env.tideRate;
+  el("l-tide").textContent = Math.abs(t) < 0.03 ? "slack"
+    : `${toKn(Math.abs(t)).toFixed(1)} kn ${t > 0 ? "flood" : "ebb"}`;
+}
+function syncAidButtons() {
+  el("b-forces").className  = aids.forces  ? "active" : "";
+  el("b-trail").className   = aids.trail   ? "active" : "";
+  el("b-coach").className   = aids.coach   ? "active" : "";
+  el("b-debrief").className = aids.debrief ? "active" : "";
+}
+function syncControls() {
+  el("r-wspd").value = Math.round(toKn(env.windSpeed));
+  el("r-wdir").value = Math.round(wrap360(toDeg(env.windDir)) / 10) * 10;
+  el("r-gust").value = Math.round(env.gustiness * 100);
+  el("r-tide").value = Math.round(env.tideRate * 20);
+  el("s-drill").value = String(curDrill);
+
+  el("s-boat").value = String(boatIndex);
+  el("boat-dims").textContent =
+    `${(BOAT.loa * 3.28084).toFixed(0)} ft · ${BOAT.loa.toFixed(2)} m LOA · ` +
+    `${BOAT.beam.toFixed(2)} m beam · ${BOAT.draft.toFixed(2)} m draft · ` +
+    `${(BOAT.disp / 1000).toFixed(1)} t · ${BOAT.keelLabel}, ${BOAT.rudderLabel}`;
+  el("boat-note").textContent = BOAT.note;
+  // Only the drivetrains this boat was actually built with.
+  el("s-drive").innerHTML = DRIVE_KEYS
+    .map((k) => `<option value="${k}">${DRIVES[k].label}</option>`).join("");
+  el("s-drive").value = boat.drive;
+  for (const [id, th] of [["b-bowthr", boat.bowThr], ["b-sternthr", boat.sternThr]]) {
+    const b = el(id);
+    b.className = th.fitted ? "active" : "";
+    // Greyed out, not just off, on a boat that never had a tunnel fitted.
+    b.disabled = !THRUSTERS.canFit;
+    b.title = THRUSTERS.canFit ? "" : BOAT.name + " was not built with thrusters";
+  }
+  syncAidButtons();
+  refreshEnvLabels();
+}
+
+function wireUi() {
+  const sel = el("s-drill");
+  sel.innerHTML = DRILLS.map((d, i) => `<option value="${i}">${d.name}</option>`).join("");
+  sel.addEventListener("change", () => startDrill(Number(sel.value)));
+  el("b-reset").addEventListener("click", () => startDrill(curDrill, boatIndex));
+
+  const bsel = el("s-boat");
+  bsel.innerHTML = BOATS.map((b, i) =>
+    `<option value="${i}">${(b.BOAT.loa * 3.28084).toFixed(0)}ft — ${b.BOAT.name}</option>`).join("");
+  // Changing boat restarts the drill: her dimensions, cleats and hull outline
+  // are all different, so there is nothing sensible to carry over.
+  bsel.addEventListener("change", () => {
+    startDrill(curDrill, Number(bsel.value));
+    say(`${BOAT.name} — ${DRIVES[boat.drive].label}`);
+  });
+
+  el("r-wspd").addEventListener("input", (e) => { env.windSpeed = Number(e.target.value) * KN; refreshEnvLabels(); });
+  el("r-wdir").addEventListener("input", (e) => { env.windDir = Number(e.target.value) * RAD; refreshEnvLabels(); });
+  el("r-gust").addEventListener("input", (e) => { env.gustiness = Number(e.target.value) / 100; refreshEnvLabels(); });
+  el("r-tide").addEventListener("input", (e) => { env.tideRate = Number(e.target.value) / 20; refreshEnvLabels(); });
+  el("s-drive").addEventListener("change", (e) => {
+    boat.drive = e.target.value;
+    say("drivetrain: " + DRIVES[boat.drive].label);
+  });
+  el("b-bowthr").addEventListener("click", () => {
+    if (THRUSTERS.canFit) boat.bowThr.fitted = !boat.bowThr.fitted;
+    syncControls();
+  });
+  el("b-sternthr").addEventListener("click", () => {
+    if (THRUSTERS.canFit) boat.sternThr.fitted = !boat.sternThr.fitted;
+    syncControls();
+  });
+  el("b-forces").addEventListener("click", () => { aids.forces = !aids.forces; syncAidButtons(); });
+  el("b-trail").addEventListener("click", () => { aids.trail = !aids.trail; syncAidButtons(); });
+  el("b-coach").addEventListener("click", () => { aids.coach = !aids.coach; syncAidButtons(); });
+  el("b-debrief").addEventListener("click", () => { aids.debrief = !aids.debrief; syncAidButtons(); });
+
+  /* Give the keyboard back to the boat the moment you finish with a panel
+     control. Without this, the arrows would quietly go on adjusting the last
+     slider you touched instead of steering, which is a horrible thing to
+     discover halfway into a berth. Sliders and dropdowns release on `change`
+     (the end of a drag, or a choice made) rather than on click, so a dropdown
+     still opens normally. */
+  for (const elm of document.querySelectorAll("#p-set input, #p-set select")) {
+    elm.addEventListener("change", () => elm.blur());
+  }
+  for (const elm of document.querySelectorAll("#p-set button")) {
+    elm.addEventListener("click", () => elm.blur());
+  }
+
+  buildDials();
+  wireDials();
+}
+
+/* Camera: follow with a soft spring, and zoom in on its own as she closes on
+   something solid, so berthing tightens the view without being asked. */
+function updateCamera(S, dt) {
+  if (cam.follow !== false) {
+    const vw = bodyToWorld(S.u * 1.6, S.v * 1.6, S.psi);   // look a little ahead
+    const k = 1 - Math.exp(-dt * 3);
+    cam.x += (S.X + vw.x - cam.x) * k;
+    cam.y += (S.Y + vw.y - cam.y) * k;
+  }
+  if (!cam.manual) {
+    let near = 60;
+    for (const ob of SOLIDS) {
+      const d = hypot(ob.cx - S.X, ob.cy - S.Y) - ob.rad;
+      if (d < near) near = d;
+    }
+    cam.targetScale = clamp(lerp(3.0, 7.0, clamp((30 - near) / 26, 0, 1)), 2.6, 7.0);
+  }
+  cam.scale += (cam.targetScale - cam.scale) * (1 - Math.exp(-dt * 4));
+}
+
+let accum = 0, lastT = 0;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  perfNow = now;
+  const realDt = Math.min((now - lastT) / 1000 || 0, 0.25);
+  lastT = now;
+
+  applyHeldKeys(realDt);
+
+  accum += realDt * (paused ? 0 : slowmo ? 0.25 : 1);
+  let n = 0;
+  while (accum >= DT && n < MAX_SUBSTEPS) {
+    stepSim(boat, env, DT, dbg);
+    accum -= DT;
+    n++;
+    const tr = boat.trail[boat.trail.length - 1];
+    if (!tr || hypot(boat.X - tr[0], boat.Y - tr[1]) > 0.35) {
+      boat.trail.push([boat.X, boat.Y, boat.psi]);
+      if (boat.trail.length > 1400) boat.trail.shift();
+    }
+  }
+  if (n === MAX_SUBSTEPS) accum = 0;          // shed the backlog, do not spiral
+
+  // A half-dialled bollard number goes once you stop typing.
+  if (pending.digits && now - pending.t > THROW_DIAL_MS) flushThrow();
+
+  for (const ev of boat.events.splice(0)) {
+    if (ev.kind === "lineParted") say("the " + ev.cleat + " line PARTED");
+    if (ev.kind === "grounding") say("you touched the bottom");
+  }
+  checkDrillDone(boat);
+  updateCamera(boat, realDt);
+
+  drawWorld(boat, env);
+  drawTrail(boat);
+  drawLines(boat);
+  drawBoat(boat);
+  drawForces(boat, dbg);
+  drawBoatIndicators(boat);
+  drawCompass(boat, env);
+  drawScale();
+  updateHud(boat, env);
+
+  const recent = msgLog.filter((m) => now - m.t < 8000).map((m) => m.msg);
+  const all = recent.concat(aids.coach ? coachHints(boat, env) : []);
+  const cp = el("p-coach");
+  if (all.length) {
+    cp.style.display = "block";
+    el("coach-msgs").innerHTML = all.slice(0, 4).map((m) => `<div class="msg">${m}</div>`).join("");
+  } else cp.style.display = "none";
+
+  if (paused) {
+    cx2.fillStyle = "rgba(232,238,242,0.85)";
+    cx2.font = "600 15px ui-monospace, monospace";
+    cx2.fillText("PAUSED", innerWidth / 2 - 26, 58);
+  }
+}
+
+/* ---- boot -------------------------------------------------------------- */
+function bootSelfTest() {
+  const { rows, pass, fail } = runSelfTest();
+  let h = `<h1 style="font:600 16px ui-monospace,monospace;margin:0 0 4px">Behavioural acceptance suite</h1>`;
+  h += `<p style="color:#8ba3b3;font:12px ui-monospace,monospace;margin:0 0 18px">` +
+       `<b style="color:${fail ? "#e5484d" : "#30a46c"}">${pass} passed, ${fail} failed</b> of ${rows.length}. ` +
+       `These assert what a real 40-footer does, not what the code does.</p>`;
+  for (const row of rows) {
+    h += `<h2 style="font:600 13px ui-monospace,monospace;margin:20px 0 3px;color:${row.ok ? "#30a46c" : "#e5484d"}">` +
+         `${row.ok ? "PASS" : "FAIL"} &nbsp; ${row.t.id} &nbsp; ${row.t.name}</h2>`;
+    h += `<p style="color:#8ba3b3;font:11px/1.6 ui-monospace,monospace;margin:0 0 7px;max-width:88ch;white-space:pre-wrap">${row.t.why}</p>`;
+    if (row.error) { h += `<pre style="color:#e5484d">${row.error}</pre>`; continue; }
+    h += `<table><tr><th>check</th><th>actual</th><th>expected</th></tr>`;
+    for (const c of row.checks) {
+      h += `<tr><td>${c.label}</td>` +
+           `<td style="color:${c.good ? "#30a46c" : "#e5484d"}">${Number(c.actual).toFixed(2)} ${c.unit}</td>` +
+           `<td style="color:#8ba3b3">${Number(c.expect).toFixed(2)} ± ${c.tol}</td></tr>`;
+    }
+    h += `</table>`;
+  }
+  const st = el("selftest");
+  st.innerHTML = h;
+  st.style.display = "block";
+}
+
+if (typeof location !== "undefined" && location.search.indexOf("selftest") >= 0) {
+  bootSelfTest();
+} else if (typeof requestAnimationFrame === "function" && cv && cv.getContext) {
+  wireUi();
+  // ?drill=N and ?zoom=N, for jumping straight to a drill at a given scale.
+  const q = new URLSearchParams(location.search);
+  startDrill(clamp(Number(q.get("drill")) || 0, 0, DRILLS.length - 1));
+  const z = Number(q.get("zoom"));
+  if (z) { cam.scale = cam.targetScale = clamp(z, 0.6, 14); cam.manual = true; }
+  requestAnimationFrame(frame);
+}
+</script>
