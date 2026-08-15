@@ -9,7 +9,12 @@ internet. One self-contained file.
 **To check the physics:** open `ssim.html?selftest=1`. It runs eighteen behavioural test cases
 headlessly and prints a pass/fail table with actual-versus-expected numbers.
 
-Also useful: `?drill=3` jumps straight to a drill, `?zoom=9` sets the initial scale.
+**On a phone or an iPad:** it starts itself in touchscreen mode — see [Touchscreen
+mode](#touchscreen-mode) below. Nothing to install there either; open the file and it rearranges
+itself around a dock of real controls.
+
+Also useful: `?drill=3` jumps straight to a drill, `?zoom=9` sets the initial scale,
+`?touch=1` / `?touch=0` forces touchscreen mode on or off.
 
 ---
 
@@ -129,13 +134,54 @@ to check most of them.
 The wheel and the engine lever bottom-left can be dragged with the mouse. Scroll to zoom, drag the
 chart to pan, double-click to go back to following the boat.
 
+### Touchscreen mode
+
+A phone or a tablet has no keys to hold down and no room for four corner panels at once, so
+`body.touch` rearranges the page: a slim band of numbers across the top, a dock of controls across
+the bottom, and the reference panels tucked into sheets that slide over the chart only while you
+are reading them. It turns itself on when the primary pointer is a fingertip
+(`pointer: coarse`), and there's a **Touchscreen mode** button under ☰ → Controls to force it
+either way — useful for trying the dock with a mouse, or turning it off on a tablet with a keyboard
+attached. The choice is remembered; `?touch=1` and `?touch=0` override it.
+
+The dock drives exactly the same code the keyboard does — its held buttons write into the same key
+table, its one-shot buttons call the same actions — so the two can't drift apart.
+
+| On the dock | |
+|---|---|
+| wheel, engine lever | drag them with a thumb; both are drawn larger than on desktop |
+| `◀` `▶` beside **bow** / **stern** | the thrusters. Held, not toggled: they run only while pressed, and grey out on a boat with no tunnel or one that has tripped |
+| the line name (`bow`) | tap to change which line you are handling |
+| **throw** | to the nearest bollard in range — the same as `G` |
+| **make fast** / **pay** / **haul** / **slip** | as `Enter`, `[`, `]`, `Backspace`. Slip moves into the ⚓ sheet on a narrow phone |
+| **all fast** | `M` — bow, spring and stern together on the face she is lying against |
+| **N** `✛` `❚❚` `↺` | neutral, centre the helm, pause, reset the drill |
+
+| On the chart | |
+|---|---|
+| tap a bollard | throw the selected line to it. The tap target is nearly twice the mouse one, and a press that wanders more than a few pixels is treated as a pan, so panning from a bollard never throws by accident |
+| drag | pan |
+| pinch | zoom |
+| double-tap the water | go back to following the boat |
+
+☰ opens the drill, the weather and the boat; ⚓ opens the mooring lines and their controls; the
+numbers along the top open wind and tide. Tapping the help card or the debrief dismisses it, since
+there is no `Esc`.
+
+The layout adapts to the room it has. On a phone the readouts lift out onto a band of their own
+above the dials — there is no width for wheel, lever, numbers and eight buttons in one row — and
+rotating the phone moves them back. Landscape phones shrink everything and drop the thruster heat
+bars. Tablets get a noticeably bigger wheel. Safe-area insets are respected, so nothing hides under
+a notch or a home indicator.
+
 ### Picking a bollard out of forty-seven
 
 The marina has 47 numbered bollards, so no single keypress can name one. Three ways to throw:
 
 - **`G`** — throws to whichever bollard is nearest and in reach. This is what you'd actually do on a
   boat, where you throw to what you can reach and never to a number. Usually all you need.
-- **Click the bollard** on the chart. Unambiguous, and the ones within range are highlighted orange.
+- **Click the bollard** on the chart — or tap it, on a touchscreen. Unambiguous, and the ones within
+  range are highlighted orange.
 - **Type the number.** Digits accumulate and the throw goes the moment the number can only mean one
   bollard — `21` can only be 21, so it goes at once. Only **1, 2, 3 and 4** wait a moment, because
   they might yet become 10–19, 20–29, 30–39 or 40–47. `Esc` cancels a half-typed number.
@@ -399,6 +445,6 @@ The two are coupled, so if you retune one, check the other.
 | 9 | Camera |
 | 10 | Boat state and the drills |
 | 11 | The behavioural acceptance suite |
-| 12–15 | Render, input, HUD, main loop |
+| 12–15 | Render, input, touchscreen mode, HUD, main loop |
 
 Physics is written as pure functions of state, so the numbers stay findable.
