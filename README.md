@@ -3,8 +3,11 @@
 A close-quarters boat-handling practice sim for single-screw sailing yachts from 27 to 44 feet.
 Top-down chart view, no diesel, no gelcoat.
 
-**To run it:** double-click `ssim.html`. That's it — no install, no build step, no server, no
-internet. One self-contained file.
+**→ [charnwooduk.github.io/sailsim](https://charnwooduk.github.io/sailsim/)** — play it in the
+browser, on anything.
+
+**To run it offline:** double-click `ssim.html`. That's it — no install, no build step, no server,
+no internet. One self-contained file, and the hosted copy is that same file.
 
 **To check the physics:** open `ssim.html?selftest=1`. It runs eighteen behavioural test cases
 headlessly and prints a pass/fail table with actual-versus-expected numbers.
