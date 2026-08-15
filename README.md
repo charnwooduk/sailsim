@@ -10,7 +10,8 @@ browser, on anything.
 no internet. One self-contained file, and the hosted copy is that same file.
 
 **To check the physics:** open `ssim.html?selftest=1`. It runs eighteen behavioural test cases
-headlessly and prints a pass/fail table with actual-versus-expected numbers.
+headlessly and prints a pass/fail table with actual-versus-expected numbers. The same suite runs in
+CI on every push and pull request — see [Continuous integration](#continuous-integration).
 
 **On a phone or an iPad:** it starts itself in touchscreen mode — see [Touchscreen
 mode](#touchscreen-mode) below. Nothing to install there either; open the file and it rearranges
@@ -431,6 +432,27 @@ damps her swing, which is correct. `k_pw_astern` was raised from 0.40 to 0.45 to
 The two are coupled, so if you retune one, check the other.
 
 ---
+
+## Continuous integration
+
+`.github/workflows/selftest.yml` runs the acceptance suite on every push and pull request, so a
+change that stops the boat behaving like a boat cannot land quietly.
+
+The expectations are **not** duplicated in CI. They live in §11 of `ssim.html` and nowhere else;
+`tools/selftest.js` only drives a headless Chromium at `ssim.html?selftest`, reads the table it
+prints, and exits non-zero on a red case. It then loads the page normally — once as desktop, once as
+a narrow touchscreen — and fails on a script error, a boat that did not boot, or chrome that runs
+off the side of the screen. A suite that passes in a file which throws on the way in is worth
+nothing, because §11 runs before any of the interface does.
+
+To run it the way CI does:
+
+```sh
+cd tools && npm install && npx playwright install chromium && node selftest.js
+```
+
+Nothing in `tools/` is needed to *play* it. `ssim.html` has no dependencies and never will — the
+runner is scaffolding for the repository, not for the simulator.
 
 ## Layout of `ssim.html`
 
