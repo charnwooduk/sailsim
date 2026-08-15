@@ -1,0 +1,11 @@
+{
+  "name": "sailsim-tools",
+  "private": true,
+  "description": "Headless runner for the simulator's acceptance suite. Nothing here is needed to play it — ssim.html has no dependencies and never will.",
+  "scripts": {
+    "selftest": "node selftest.js"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

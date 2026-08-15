@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Marina Docking Simulator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="ssim.html">
+
+<!-- GitHub Pages serves index.html for the bare URL, but the simulator lives in
+     ssim.html and stays there — the README, the bookmarks and the ?selftest
+     link all name that file. So this is a doorway and nothing else.
+
+     The query string and the fragment are carried across, because they are how
+     you jump to a drill (?drill=3), set the scale (?zoom=9), force touchscreen
+     mode (?touch=1) or run the acceptance suite (?selftest). A bare meta
+     refresh would drop them, so the redirect is done in script and the refresh
+     is left as the fallback for anyone without it. -->
+<script>
+  location.replace("ssim.html" + location.search + location.hash);
+</script>
+<noscript><meta http-equiv="refresh" content="0; url=ssim.html"></noscript>
+
+<body style="margin:0;padding:40px;background:#08202f;color:#e8eef2;
+             font:14px/1.6 ui-monospace,'SF Mono',Consolas,monospace">
+  <p>Taking you to the <a href="ssim.html" style="color:#ffb454">Marina Docking Simulator</a>…</p>
+</body>
