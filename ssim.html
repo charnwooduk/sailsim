@@ -1,5 +1,10 @@
 <title>Marina Docking Simulator — First 40.1</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Docking Sim">
+<meta name="theme-color" content="#08202f">
 <style>
 /* ==========================================================================
    SSIM — Marina Docking Simulator
@@ -33,9 +38,14 @@ html, body {
   color: var(--ink);
   font: 13px/1.45 ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   -webkit-font-smoothing: antialiased;
+  /* A finger dragged across the chart must not scroll, bounce or zoom the page
+     itself — every gesture belongs to the simulator. */
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 
-#world { position: fixed; inset: 0; display: block; cursor: crosshair; }
+#world { position: fixed; inset: 0; display: block; cursor: crosshair; touch-action: none; }
 
 /* ----- generic panel chrome ----- */
 .panel {
@@ -94,6 +104,9 @@ input[type=range] { width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
 
 /* ----- helm + throttle dials ----- */
 #dials { display: flex; gap: 12px; align-items: center; }
+#ctl-read { flex: 1; min-width: 0; }
+#ctl-read .thr-block { margin-top: 6px; }
+#ctl-read .thr-row-2 { margin-top: 4px; }
 #dials svg { flex: none; cursor: grab; touch-action: none; }
 #dials svg:active { cursor: grabbing; }
 .dial-face   { fill: rgba(0,0,0,0.35); stroke: var(--panel-edge); }
@@ -148,6 +161,196 @@ kbd {
 #selftest table { border-collapse: collapse; font-size: 12px; }
 #selftest td, #selftest th { border: 1px solid #23485f; padding: 4px 9px; text-align: left; vertical-align: top; }
 #selftest th { background: #0d2b3e; }
+
+/* ==========================================================================
+   TOUCHSCREEN MODE
+   A phone or an iPad has no keyboard to hold down and no room for four corner
+   panels at once, so `body.touch` rearranges the whole thing: a slim bar of
+   numbers across the top, a dock of real controls across the bottom, and the
+   reference panels — conditions, wind and tide, mooring lines — tucked into
+   sheets that slide over the chart only while you are reading them.
+
+   Everything else, the physics and the drawing, is untouched. The dock drives
+   the same held-key state the keyboard does.
+   ========================================================================== */
+
+#touch-top, #touch-dock, #touch-scrim { display: none; }
+body.touch #touch-top, body.touch #touch-dock { display: flex; }
+body.touch #hint { display: none; }
+
+/* Nothing in the chrome should ever be interpreted as a page gesture. */
+body.touch button, body.touch select, body.touch input, body.touch .panel { touch-action: manipulation; }
+body.touch input[type=range] { touch-action: pan-x; }
+
+/* ----- top bar: the numbers you actually steer by ----- */
+#touch-top {
+  position: fixed; z-index: 22;
+  top: 0; left: 0; right: 0;
+  align-items: stretch; gap: 6px;
+  padding: calc(env(safe-area-inset-top, 0px) + 5px) calc(env(safe-area-inset-right, 0px) + 6px) 5px
+           calc(env(safe-area-inset-left, 0px) + 6px);
+  background: linear-gradient(rgba(6,20,30,0.92), rgba(6,20,30,0.62));
+  border-bottom: 1px solid var(--panel-edge);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  user-select: none;
+}
+#touch-top button {
+  width: auto; flex: none; min-width: 42px; height: 38px;
+  font-size: 15px; line-height: 1; padding: 0 9px;
+}
+#tt-read {
+  flex: 1; min-width: 0; display: flex; gap: 4px; align-items: center;
+  overflow: hidden; cursor: pointer;
+  border: 1px solid transparent; border-radius: 4px; padding: 0 2px;
+}
+#tt-read:active { background: rgba(255,255,255,0.08); }
+#tt-read > span {
+  flex: 1 1 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; line-height: 1.15;
+}
+#tt-read i { font-style: normal; font-size: 8.5px; letter-spacing: 0.1em; color: var(--ink-dim); text-transform: uppercase; }
+#tt-read b {
+  font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums;
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The mooring-line sheet's own action buttons exist only on a touchscreen. */
+#pl-acts { display: none; }
+body.touch #pl-acts { display: grid; }
+
+/* ----- bottom dock: helm, engine, thrusters, lines ----- */
+#touch-dock {
+  position: fixed; z-index: 22;
+  left: 0; right: 0; bottom: 0;
+  flex-direction: column; gap: 5px;
+  padding: 6px calc(env(safe-area-inset-right, 0px) + 6px)
+           calc(env(safe-area-inset-bottom, 0px) + 6px) calc(env(safe-area-inset-left, 0px) + 6px);
+  background: linear-gradient(rgba(6,20,30,0.55), rgba(6,20,30,0.95) 45%);
+  border-top: 1px solid var(--panel-edge);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  user-select: none;
+}
+#td-lines { display: flex; gap: 5px; }
+#td-lines button { flex: 1 1 0; min-width: 0; height: 36px; padding: 0 2px; font-size: 11px; white-space: nowrap; }
+#td-sel { font-weight: 600; color: var(--accent); }
+#td-main { display: flex; gap: 8px; align-items: stretch; }
+
+/* The wheel and lever panel is lifted out of its corner and dropped in here. */
+body.touch #p-ctl {
+  position: static; flex: 1 1 auto; min-width: 0; width: auto;
+  background: none; border: 0; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+body.touch #p-ctl > h2 { display: none; }
+body.touch #dials { gap: 9px; align-items: stretch; }
+/* Bigger targets: the SVGs are scaled by CSS and the drag maths follows the
+   viewBox, so a wheel you can actually grab with a thumb behaves identically. */
+body.touch #svg-wheel { width: 104px; height: 104px; }
+body.touch #svg-lever { width: 68px; height: 104px; }
+/* The numbers belong beside the dials, not stretched across a tablet. */
+body.touch #ctl-read { font-size: 12px; flex: 0 1 250px; }
+
+/* On a phone the wheel, the lever and the button pads use up the whole width,
+   so the readouts are moved out (in JS) to a band of their own across the dock
+   and laid out along it instead of down. */
+body.touch #touch-dock > #ctl-read {
+  flex: none; display: flex; align-items: center; gap: 10px; font-size: 10.5px;
+}
+body.touch #touch-dock > #ctl-read > .row { flex: 1 1 auto; min-width: 0; gap: 5px; overflow: hidden; }
+body.touch #touch-dock > #ctl-read > .row .k { flex: none; }
+body.touch #touch-dock > #ctl-read > .thr-block {
+  flex: 0 0 106px; margin-top: 0;
+  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px 5px;
+}
+body.touch #touch-dock > #ctl-read .thr-row { display: block; }
+body.touch #touch-dock > #ctl-read .thr-row .v { display: none; }
+body.touch #touch-dock > #ctl-read .thr-row .k { font-size: 9px; }
+body.touch #touch-dock > #ctl-read .bar { margin: 0; }
+body.touch #touch-dock > #ctl-read .thr-row-2 { margin-top: 0; }
+/* The wheel says what the helm is doing better than a number does. */
+body.touch #touch-dock > #ctl-read .r-helm { display: none; }
+
+#td-thr { flex: none; display: grid; grid-template-columns: auto 46px 46px; gap: 4px; align-content: center; }
+#td-thr .lab { display: flex; align-items: center; font-size: 10px; color: var(--ink-dim); padding-right: 2px; }
+#td-thr button { height: 38px; font-size: 16px; line-height: 1; padding: 0; }
+/* Two by two rather than a single column: four buttons stacked would make the
+   dock taller than the wheel and steal chart from a short screen. */
+#td-misc { flex: none; display: grid; grid-template-columns: 48px 48px; gap: 4px; align-content: center; }
+#td-misc button { width: 100%; height: 38px; font-size: 14px; padding: 0; }
+#td-neutral { font-weight: 700; }
+
+/* A held control lights up, so you can see the thruster is running even when
+   your thumb is over the button. */
+body.touch button.held { background: var(--accent); color: #1a1206; border-color: var(--accent); }
+
+/* ----- reference panels become sheets ----- */
+body.touch #p-env, body.touch #p-set, body.touch #p-lines {
+  top: calc(env(safe-area-inset-top, 0px) + 54px); bottom: auto;
+  left: 50%; right: auto; transform: translateX(-50%);
+  width: min(360px, calc(100vw - 18px)); max-width: none;
+  max-height: calc(100vh - var(--dock-h, 150px) - 70px);      /* older Safari */
+  max-height: calc(100dvh - var(--dock-h, 150px) - 70px);
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  display: none; z-index: 24;
+}
+body.touch #p-env.open, body.touch #p-set.open, body.touch #p-lines.open { display: block; }
+body.touch #touch-scrim.open { display: block; position: fixed; inset: 0; z-index: 23; background: rgba(3,10,16,0.35); }
+
+/* Fingers need bigger rows and slider thumbs than a mouse does. */
+body.touch #p-set select, body.touch #p-set button { min-height: 34px; }
+body.touch input[type=range] { height: 30px; }
+body.touch .lrow { padding: 7px 5px; }
+body.touch .toggles { gap: 7px; }
+
+/* Coach sits clear of the dock; the modals stay on screen on a short display. */
+body.touch #p-coach {
+  bottom: calc(var(--dock-h, 150px) + 6px);
+  width: min(440px, calc(100vw - 18px)); z-index: 21;
+}
+body.touch #p-debrief, body.touch #help {
+  width: min(470px, calc(100vw - 18px));
+  max-height: calc(100vh - 90px);                             /* older Safari */
+  max-height: calc(100dvh - 90px);
+  overflow-y: auto;
+}
+body.touch #help td:first-child { width: 96px; }
+
+/* ----- narrow phones -----
+   A phone is not wide enough for wheel, lever, numbers and eight buttons in one
+   row without squeezing the numbers to nothing, so the readouts lift out onto
+   their own line above the controls they describe, laid out across instead of
+   down. It costs about twenty pixels of chart and keeps everything legible. */
+@media (max-width: 560px) {
+  /* Seven line buttons will not fit across a phone. Slip is the one you use
+     least and it is a tap away in the ⚓ sheet. */
+  body.touch #td-slip { display: none; }
+  body.touch #td-lines button { font-size: 10px; height: 34px; overflow: hidden; }
+  body.touch #svg-wheel { width: 84px; height: 84px; }
+  body.touch #svg-lever { width: 56px; height: 84px; }
+  body.touch #td-thr { grid-template-columns: auto 40px 40px; }
+  body.touch #td-misc { grid-template-columns: 40px 40px; }
+  /* Rate of turn is the first thing to go when the bar gets crowded. */
+  body.touch #tt-rot-col { display: none; }
+  body.touch #tt-read b { font-size: 12px; }
+  body.touch #tt-read i { font-size: 8px; }
+}
+/* ----- tablets have room for a wheel you can really get hold of ----- */
+@media (min-width: 820px) and (min-height: 620px) {
+  body.touch #svg-wheel { width: 124px; height: 124px; }
+  body.touch #svg-lever { width: 78px; height: 124px; }
+  body.touch #ctl-read { font-size: 13px; flex-basis: 280px; }
+  body.touch #td-thr button { height: 44px; }
+  body.touch #td-misc button { height: 44px; }
+}
+/* ----- landscape phone: barely any height at all, so everything shrinks ----- */
+@media (max-height: 460px) {
+  body.touch #ctl-read .bar, body.touch #ctl-read .thr-row { display: none; }
+  body.touch #svg-wheel { width: 76px; height: 76px; }
+  body.touch #svg-lever { width: 50px; height: 76px; }
+  body.touch #td-lines button { height: 30px; }
+  body.touch #td-thr button, body.touch #td-misc button, body.touch #touch-top button { height: 32px; }
+  body.touch #touch-dock { gap: 4px; padding-top: 4px; }
+  body.touch #p-coach { font-size: 11px; padding: 6px 9px; }
+}
 </style>
 
 <canvas id="world"></canvas>
@@ -209,6 +412,14 @@ kbd {
     <button id="b-coach">Coach</button>
     <button id="b-debrief">Debrief</button>
   </div>
+
+  <div class="hr"></div>
+  <h2>Controls</h2>
+  <button id="b-touch">Touchscreen mode</button>
+  <div style="font-size:11px; color:var(--ink-dim); margin-top:4px">
+    On by itself on a phone or tablet. Turn it on with a mouse to try the dock,
+    or off on a tablet with a keyboard attached.
+  </div>
 </div>
 
 <!-- ===================== helm + throttle ===================== -->
@@ -217,14 +428,14 @@ kbd {
   <div id="dials">
     <svg id="svg-wheel" width="88" height="88" viewBox="-44 -44 88 88"></svg>
     <svg id="svg-lever" width="60" height="88" viewBox="-22 -44 60 88"></svg>
-    <div style="flex:1; min-width:0">
-      <div class="row"><span class="k">Helm</span><span class="v" id="v-helm">—</span></div>
+    <div id="ctl-read">
+      <div class="row r-helm"><span class="k">Helm</span><span class="v" id="v-helm">—</span></div>
       <div class="row"><span class="k">Engine</span><span class="v" id="v-thr">—</span></div>
       <div class="row"><span class="k">Gear</span><span class="v" id="v-gear">—</span></div>
-      <div style="margin-top:6px">
-        <div class="row"><span class="k">Bow thr</span><span class="v" id="v-bow">off</span></div>
+      <div class="thr-block">
+        <div class="row thr-row"><span class="k">Bow thr</span><span class="v" id="v-bow">off</span></div>
         <div class="bar" id="bar-bow"><i></i></div>
-        <div class="row" style="margin-top:4px"><span class="k">Stern thr</span><span class="v" id="v-stern">off</span></div>
+        <div class="row thr-row thr-row-2"><span class="k">Stern thr</span><span class="v" id="v-stern">off</span></div>
         <div class="bar" id="bar-stern"><i></i></div>
       </div>
     </div>
@@ -235,6 +446,14 @@ kbd {
 <div class="panel" id="p-lines">
   <h2>Mooring Lines</h2>
   <div id="line-rows"></div>
+  <!-- Touchscreen only: the same line handling as the dock strip, in the place
+       you are already looking when you are sorting your lines out. -->
+  <div class="toggles" id="pl-acts">
+    <button id="pl-throw">Throw</button>
+    <button id="pl-fast">Make fast</button>
+    <button id="pl-slip">Slip</button>
+    <button id="pl-alongside">All fast</button>
+  </div>
   <div class="hr"></div>
   <div style="color:var(--ink-dim); font-size:11px" id="throw-hint">—</div>
 </div>
@@ -268,6 +487,65 @@ kbd {
   <div style="color:var(--ink-dim);font-size:11px">
     The wheel and the lever bottom-left can be dragged with the mouse. Scroll to
     zoom, drag the chart to pan, double-click to follow the boat again.
+  </div>
+  <div class="hr"></div>
+  <h2>On a touchscreen</h2>
+  <div style="color:var(--ink-dim);font-size:11px;line-height:1.55">
+    Drag the wheel and the engine lever with a thumb. The arrows beside them are
+    the bow and stern thrusters — hold them, they run only while pressed. The
+    strip above handles the mooring lines: tap the name to change which line you
+    are working, THROW sends it to the nearest bollard, or tap the bollard you
+    want on the chart. ALL FAST is the same thing as <kbd>M</kbd>: bow, spring
+    and stern together on the face she is lying against.<br><br>
+    Drag the chart to pan, pinch to zoom, double-tap the water to follow her
+    again. ☰ opens the drill, the weather and the boat; ⚓ opens the mooring
+    lines; the numbers along the top open wind and tide. Tap this card to close
+    it. A keyboard still works if one is attached.
+  </div>
+</div>
+
+<!-- ===================== touchscreen chrome =====================
+     Hidden entirely unless <body> carries the `touch` class. -->
+<div id="touch-scrim"></div>
+
+<div id="touch-top">
+  <button id="tt-menu" title="Drill, conditions and boat">☰</button>
+  <div id="tt-read" title="Wind and tide">
+    <span><i>stw</i><b id="tt-stw">—</b></span>
+    <span><i>hdg</i><b id="tt-hdg">—</b></span>
+    <span id="tt-rot-col"><i>turn</i><b id="tt-rot">—</b></span>
+    <span><i>wind</i><b id="tt-wind">—</b></span>
+  </div>
+  <button id="tt-lines" title="Mooring lines">⚓</button>
+  <button id="tt-help" title="Controls">?</button>
+</div>
+
+<div id="touch-dock">
+  <div id="td-lines">
+    <button id="td-sel" title="Choose which line you are handling">bow</button>
+    <button id="td-throw" title="Throw the selected line to the nearest bollard">throw</button>
+    <button id="td-fast" title="Make the selected line fast">make fast</button>
+    <button id="td-pay" data-hold="[" title="Pay out">pay ⟨</button>
+    <button id="td-haul" data-hold="]" title="Haul in">⟩ haul</button>
+    <button id="td-slip" title="Slip the selected line">slip</button>
+    <button id="td-alongside" title="Rig bow, spring and stern all at once">all fast</button>
+  </div>
+  <div id="td-main">
+    <!-- #p-ctl (wheel, lever and readouts) is moved in here at runtime -->
+    <div id="td-thr">
+      <span class="lab">bow</span>
+      <button data-hold="q" title="Bow thruster to port">◀</button>
+      <button data-hold="e" title="Bow thruster to starboard">▶</button>
+      <span class="lab">stern</span>
+      <button data-hold="," title="Stern thruster to port">◀</button>
+      <button data-hold="." title="Stern thruster to starboard">▶</button>
+    </div>
+    <div id="td-misc">
+      <button id="td-neutral" title="Slam into neutral">N</button>
+      <button id="td-centre" title="Centre the helm">✛</button>
+      <button id="td-pause" title="Pause">❚❚</button>
+      <button id="td-reset" title="Reset the drill">↺</button>
+    </div>
   </div>
 </div>
 
@@ -1896,6 +2174,9 @@ function resizeCanvas() {
   cam.dpr = dpr;
 }
 window.addEventListener("resize", resizeCanvas);
+// iOS changes the visual viewport without always firing a window resize — the
+// address bar sliding away is enough to leave the chart the wrong size.
+if (window.visualViewport) visualViewport.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
 const w2s = (X, Y) => ({
@@ -3075,8 +3356,11 @@ function drawCompass(S, env) {
 function drawScale() {
   let m = 5;
   for (const c of [5, 10, 20, 25, 50, 100]) if (c * cam.scale < 130) m = c;
-  // Clear of the helm panel bottom-left and the coach panel bottom-centre.
-  const px = m * cam.scale, x = 340, y = innerHeight - 24;
+  // Clear of the helm panel bottom-left and the coach panel bottom-centre — or,
+  // on a touchscreen, of the control dock along the foot of the chart.
+  const px = m * cam.scale;
+  const x = touchMode ? 14 : 340;
+  const y = innerHeight - (touchMode ? uiInsets.bottom + 10 : 24);
   cx2.strokeStyle = "rgba(200,225,240,0.6)"; cx2.lineWidth = 1.5;
   cx2.beginPath();
   cx2.moveTo(x, y - 4); cx2.lineTo(x, y); cx2.lineTo(x + px, y); cx2.lineTo(x + px, y - 4);
@@ -3095,6 +3379,36 @@ const aids = { forces: true, trail: true, coach: true, debrief: true };
 let paused = false, slowmo = false;
 const el = (id) => document.getElementById(id);
 
+/* Every one-shot thing you can do to the boat, named once. The keyboard calls
+   these and so do the touchscreen dock buttons, so the two can never drift
+   apart — a fix to what G does is a fix to what the THROW button does. */
+const ACT = {
+  neutral()    { boat.lever = 0; },
+  centreHelm() { boat.deltaCmd = 0; },
+  selLine(step) { boat.selLine = (boat.selLine + step + 3) % 3; },
+  throwNearest() { throwNearest(); },
+  makeFast() {
+    const ln = boat.lines[boat.selLine];
+    if (ln.bollard == null) say("nothing to make fast — throw the " + ln.name + " line first");
+    else if (ln.madeFast) say("the " + ln.name + " line is already fast");
+    else {
+      ln.madeFast = true;
+      say(ln.name + " line made fast — you can haul on it now");
+    }
+  },
+  slip() {
+    const ln = boat.lines[boat.selLine];
+    if (ln.bollard != null) { ln.bollard = null; say("slipped the " + ln.name + " line"); }
+  },
+  alongside() { say(makeFastAlongside(boat)); },
+  reset()     { startDrill(curDrill); },
+  pause()     { paused = !paused; syncTouchButtons(); },
+  toggleHelp() {
+    const hp = el("help");
+    hp.style.display = hp.style.display === "block" ? "none" : "block";
+  },
+};
+
 addEventListener("keydown", (e) => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   // Don't steer the boat while a panel control has the keyboard.
@@ -3112,34 +3426,18 @@ addEventListener("keydown", (e) => {
   keys[k] = true;
   if (k === "Shift") slowmo = true;
   switch (k) {
-    case " ": boat.lever = 0; e.preventDefault(); break;
-    case "x": boat.deltaCmd = 0; break;
-    case "z": boat.selLine = (boat.selLine + 2) % 3; break;
-    case "c": boat.selLine = (boat.selLine + 1) % 3; break;
+    case " ": ACT.neutral(); e.preventDefault(); break;
+    case "x": ACT.centreHelm(); break;
+    case "z": ACT.selLine(-1); break;
+    case "c": ACT.selLine(+1); break;
     case "f": aids.forces = !aids.forces; syncAidButtons(); break;
     case "t": aids.trail  = !aids.trail;  syncAidButtons(); break;
-    case "p": paused = !paused; break;
-    case "r": startDrill(curDrill); break;
-    case "m": say(makeFastAlongside(boat)); break;
-    case "h": {
-      const hp = el("help");
-      hp.style.display = hp.style.display === "block" ? "none" : "block";
-      break;
-    }
-    case "Backspace": {
-      const ln = boat.lines[boat.selLine];
-      if (ln.bollard != null) { ln.bollard = null; say("slipped the " + ln.name + " line"); }
-      e.preventDefault();
-      break;
-    }
-    case "Enter": {
-      const ln = boat.lines[boat.selLine];
-      if (ln.bollard != null && !ln.madeFast) {
-        ln.madeFast = true;
-        say(ln.name + " line made fast — you can haul on it now");
-      }
-      break;
-    }
+    case "p": ACT.pause(); break;
+    case "r": ACT.reset(); break;
+    case "m": ACT.alongside(); break;
+    case "h": ACT.toggleHelp(); break;
+    case "Backspace": ACT.slip(); e.preventDefault(); break;
+    case "Enter": ACT.makeFast(); break;
   }
   if (k >= "0" && k <= "9") { pushThrowDigit(k); e.preventDefault(); }
   if (k === "g") throwNearest();
@@ -3211,9 +3509,13 @@ function throwNearest() {
            : `nothing within ${LINE.rangeMax} m of your ${ln.name} cleat`);
 }
 
-/* Which numbered bollard is under the pointer, if any. */
+/* How far a press may wander and still count as a tap rather than a pan. */
+const TAP_SLOP = 9;
+
+/* Which numbered bollard is under the pointer, if any. A fingertip covers a
+   great deal more chart than a mouse cursor does, so it gets a wider net. */
 function bollardAtScreen(sx, sy) {
-  let best = null, bd = 16;
+  let best = null, bd = touchMode ? 30 : 16;
   for (const b of WORLD.bollards) {
     const p = w2s(b.x, b.y);
     const d = hypot(p.x - sx, p.y - sy);
@@ -3294,15 +3596,29 @@ function dragify(svg, onValue) {
   let active = false;
   const handle = (ev) => {
     const r = svg.getBoundingClientRect();
-    onValue(ev.clientX - r.left - r.width / 2, ev.clientY - r.top - r.height / 2);
+    if (!r.width || !r.height) return;
+    /* Report the grab in viewBox units, not screen pixels. On a touchscreen the
+       wheel and the lever are drawn larger so a thumb can find them, and the
+       lever would otherwise run to its stop halfway up the slot. */
+    const kx = svg.viewBox.baseVal.width  / r.width;
+    const ky = svg.viewBox.baseVal.height / r.height;
+    onValue((ev.clientX - r.left - r.width / 2) * kx,
+            (ev.clientY - r.top - r.height / 2) * ky);
     ev.preventDefault();
   };
-  svg.addEventListener("pointerdown", (ev) => { active = true; svg.setPointerCapture(ev.pointerId); handle(ev); });
-  svg.addEventListener("pointermove", (ev) => { if (active) handle(ev); });
-  svg.addEventListener("pointerup", (ev) => {
+  const release = (ev) => {
     active = false;
     try { svg.releasePointerCapture(ev.pointerId); } catch (_) {}
+  };
+  svg.addEventListener("pointerdown", (ev) => {
+    active = true;
+    try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+    handle(ev);
   });
+  svg.addEventListener("pointermove", (ev) => { if (active) handle(ev); });
+  svg.addEventListener("pointerup", release);
+  // A touch that gets stolen by the browser must not leave the helm hard over.
+  svg.addEventListener("pointercancel", release);
 }
 
 function wireDials() {
@@ -3316,29 +3632,243 @@ function wireDials() {
     boat.lever = v;
   });
 
+  const zoomBy = (f) => {
+    cam.targetScale = clamp(cam.targetScale * f, 0.6, 14);
+    cam.scale = clamp(cam.scale * f, 0.6, 14);      // pinch should feel immediate
+    cam.manual = true;
+  };
   cv.addEventListener("wheel", (ev) => {
     cam.targetScale = clamp(cam.targetScale * (ev.deltaY < 0 ? 1.14 : 1 / 1.14), 0.6, 14);
     cam.manual = true;
     ev.preventDefault();
   }, { passive: false });
 
-  let pan = null;
+  /* ---- chart gestures -------------------------------------------------
+     One finger (or the mouse) drags the chart; a press that goes down and up
+     in the same place is a tap, and a tap on a bollard throws the selected
+     line to it. Deciding on release rather than on press means panning that
+     happens to start over a bollard no longer throws a line by accident.
+     Two fingers pinch to zoom, which is the only way to zoom without a wheel. */
+  const pts = new Map();
+  let pan = null, pinch = null, tapFrom = null, lastTap = 0;
+
   cv.addEventListener("pointerdown", (ev) => {
-    // Clicking a bollard throws the selected line to it — much the easiest way
-    // to pick one out of forty-seven. Only then does a drag start panning.
-    const b = bollardAtScreen(ev.clientX, ev.clientY);
-    if (b) { pending = { digits: "", t: 0 }; say(throwLine(boat, boat.selLine, b.n)); return; }
-    pan = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y };
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    try { cv.setPointerCapture(ev.pointerId); } catch (_) {}
+    if (pts.size === 1) {
+      pan = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y };
+      tapFrom = { x: ev.clientX, y: ev.clientY };
+    } else if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.max(hypot(a.x - b.x, a.y - b.y), 1) };
+      pan = null; tapFrom = null;                   // a second finger is never a tap
+    }
   });
+
   cv.addEventListener("pointermove", (ev) => {
+    if (!pts.has(ev.pointerId)) return;
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pinch && pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      const d = Math.max(hypot(a.x - b.x, a.y - b.y), 1);
+      zoomBy(clamp(d / pinch.d, 0.5, 2));
+      pinch.d = d;
+      return;
+    }
     if (!pan) return;
+    if (tapFrom && hypot(ev.clientX - tapFrom.x, ev.clientY - tapFrom.y) > TAP_SLOP) tapFrom = null;
     cam.follow = false;
     cam.x = pan.cx - (ev.clientX - pan.x) / cam.scale;
     cam.y = pan.cy + (ev.clientY - pan.y) / cam.scale;
   });
-  cv.addEventListener("pointerup", () => { pan = null; });
+
+  const lift = (ev) => {
+    pts.delete(ev.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size === 0) {
+      pan = null;
+      if (tapFrom) {
+        const b = bollardAtScreen(tapFrom.x, tapFrom.y);
+        if (b) {
+          pending = { digits: "", t: 0 };
+          say(throwLine(boat, boat.selLine, b.n));
+        } else if (perfNow - lastTap < 320) {
+          // Double tap on open water is the touchscreen's double-click: follow her again.
+          cam.follow = true; cam.manual = false;
+        }
+        lastTap = perfNow;
+        tapFrom = null;
+      }
+    } else if (pts.size === 1) {
+      // Coming out of a pinch — re-anchor the pan on the finger still down.
+      const [p] = [...pts.values()];
+      pan = { x: p.x, y: p.y, cx: cam.x, cy: cam.y };
+    }
+    try { cv.releasePointerCapture(ev.pointerId); } catch (_) {}
+  };
+  cv.addEventListener("pointerup", lift);
+  cv.addEventListener("pointercancel", (ev) => { tapFrom = null; lift(ev); });
   cv.addEventListener("dblclick", () => { cam.follow = true; cam.manual = false; });
 }
+
+/* ==========================================================================
+   §13b  TOUCHSCREEN MODE
+   A phone or an iPad has no keys to hold down, so the dock holds them instead:
+   its buttons write into the very same `keys` table the keyboard does, and its
+   one-shot buttons call the very same ACT functions. Nothing below this point
+   in the file knows or cares which one you used.
+   ========================================================================== */
+
+let touchMode = false;
+const uiInsets = { bottom: 0 };           // chart space eaten by the dock
+
+/* Remember the choice, but never let a storage failure (private browsing, a
+   file:// page on some browsers) stop the simulator loading. */
+function touchPref(v) {
+  try {
+    if (v === undefined) return localStorage.getItem("ssim.touch");
+    localStorage.setItem("ssim.touch", v);
+  } catch (_) {}
+  return null;
+}
+
+function openSheet(id) {
+  const wanted = id && el(id).classList.contains("open") ? null : id;   // tap again to close
+  for (const s of ["p-env", "p-set", "p-lines"]) el(s).classList.toggle("open", s === wanted);
+  el("touch-scrim").classList.toggle("open", !!wanted);
+}
+function closeSheets() { openSheet(null); }
+
+/* On a phone the wheel, the lever and the two button pads take the whole width
+   between them, so the helm and engine numbers go into a band of their own
+   above the controls they describe. On anything wider they sit beside the
+   dials, which is tidier and costs no height. Rotating the phone moves them. */
+const NARROW = matchMedia("(max-width: 560px)");
+function placeReadout() {
+  const r = el("ctl-read");
+  if (touchMode && NARROW.matches) el("touch-dock").insertBefore(r, el("td-main"));
+  else el("dials").appendChild(r);
+  measureDock();
+}
+
+function setTouchMode(on, remember) {
+  touchMode = !!on;
+  document.body.classList.toggle("touch", touchMode);
+  // The helm and engine panel is the same panel either way — it is simply
+  // re-parented into the dock, so it keeps its wiring and its readouts.
+  if (touchMode) el("td-main").insertBefore(el("p-ctl"), el("td-thr"));
+  else { document.body.appendChild(el("p-ctl")); closeSheets(); }
+  placeReadout();
+  if (remember) touchPref(touchMode ? "1" : "0");
+  const b = el("b-touch");
+  if (b) b.className = touchMode ? "active" : "";
+  measureDock();
+}
+
+function measureDock() {
+  const h = touchMode ? el("touch-dock").offsetHeight : 0;
+  uiInsets.bottom = h;
+  document.documentElement.style.setProperty("--dock-h", h + "px");
+}
+
+/* A dock button that behaves like a held key: down engages, up releases. Used
+   for the thrusters and for warping a line in or out, all of which you do for
+   as long as you keep your thumb there. */
+function wireHoldButton(b) {
+  const k = b.dataset.hold;
+  const press = (ev) => {
+    keys[k] = true;
+    b.classList.add("held");
+    try { b.setPointerCapture(ev.pointerId); } catch (_) {}
+    ev.preventDefault();
+  };
+  const release = (ev) => {
+    keys[k] = false;
+    b.classList.remove("held");
+    try { b.releasePointerCapture(ev.pointerId); } catch (_) {}
+  };
+  b.addEventListener("pointerdown", press);
+  b.addEventListener("pointerup", release);
+  b.addEventListener("pointercancel", release);
+  b.addEventListener("contextmenu", (ev) => ev.preventDefault());   // long press must not pop a menu
+}
+
+function wireTouch() {
+  for (const b of document.querySelectorAll("[data-hold]")) wireHoldButton(b);
+
+  const tap = (id, fn) => el(id).addEventListener("click", (ev) => { fn(); ev.currentTarget.blur(); });
+  tap("td-sel",       () => ACT.selLine(+1));
+  for (const id of ["td-throw", "pl-throw"])         tap(id, () => ACT.throwNearest());
+  for (const id of ["td-fast", "pl-fast"])           tap(id, () => ACT.makeFast());
+  for (const id of ["td-slip", "pl-slip"])           tap(id, () => ACT.slip());
+  for (const id of ["td-alongside", "pl-alongside"]) tap(id, () => ACT.alongside());
+  tap("td-neutral",   () => ACT.neutral());
+  tap("td-centre",    () => ACT.centreHelm());
+  tap("td-pause",     () => ACT.pause());
+  tap("td-reset",     () => ACT.reset());
+
+  tap("tt-menu",  () => openSheet("p-set"));
+  tap("tt-lines", () => openSheet("p-lines"));
+  tap("tt-read",  () => openSheet("p-env"));
+  tap("tt-help",  () => { closeSheets(); ACT.toggleHelp(); });
+  el("touch-scrim").addEventListener("click", closeSheets);
+  // Tapping the debrief or the help card dismisses it — there is no Esc key.
+  el("help").addEventListener("click", () => { el("help").style.display = "none"; });
+  el("p-debrief").addEventListener("click", () => { el("p-debrief").style.display = "none"; });
+
+  el("b-touch").addEventListener("click", () => setTouchMode(!touchMode, true));
+
+  /* Start in touch mode on a device whose primary pointer is a fingertip,
+     unless the player has said otherwise before or asked for a mode in the URL. */
+  const q = new URLSearchParams(location.search);
+  const coarse = matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 1;
+  const saved = touchPref();
+  const want = q.has("touch") ? q.get("touch") !== "0"
+             : saved != null  ? saved === "1"
+             : coarse;
+  setTouchMode(want, false);
+
+  if (typeof ResizeObserver === "function") new ResizeObserver(measureDock).observe(el("touch-dock"));
+  if (NARROW.addEventListener) NARROW.addEventListener("change", placeReadout);
+  addEventListener("orientationchange", () => setTimeout(() => { resizeCanvas(); placeReadout(); }, 120));
+  if (window.visualViewport) visualViewport.addEventListener("resize", measureDock);
+}
+
+/* Keep the dock's own state in step with the boat: grey out what she cannot do
+   just now, and let go of any held button that has just been greyed out — a
+   disabled button never sends the release that would have stopped the thruster. */
+function setDockEnabled(b, ok) {
+  if (!b) return;
+  b.disabled = !ok;
+  if (!ok && b.classList.contains("held")) {
+    b.classList.remove("held");
+    if (b.dataset.hold) keys[b.dataset.hold] = false;
+  }
+}
+
+function syncTouchButtons() {
+  if (!touchMode) return;
+  el("td-pause").classList.toggle("held", paused);
+  const ln = boat.lines[boat.selLine], rigged = ln.bollard != null;
+  el("td-sel").textContent = ln.name;
+  for (const id of ["td-fast", "pl-fast"]) setDockEnabled(el(id), rigged && !ln.madeFast);
+  for (const id of ["td-slip", "pl-slip", "td-pay", "td-haul"]) setDockEnabled(el(id), rigged);
+  for (const b of document.querySelectorAll("#td-thr [data-hold]")) {
+    const th = (b.dataset.hold === "q" || b.dataset.hold === "e") ? boat.bowThr : boat.sternThr;
+    setDockEnabled(b, th.fitted && !th.tripped);
+  }
+}
+
+/* A thumb lifted outside the button, a phone call, a tab switch — anything that
+   costs us the keyup would otherwise leave a thruster running or the wheel
+   winding over on its own. Let go of everything. */
+function releaseAllKeys() {
+  for (const k of Object.keys(keys)) keys[k] = false;
+  for (const b of document.querySelectorAll("[data-hold].held")) b.classList.remove("held");
+  slowmo = false;
+}
+addEventListener("blur", releaseAllKeys);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAllKeys(); });
 
 /* ==========================================================================
    §14  HUD
@@ -3419,6 +3949,17 @@ function updateHud(S, env) {
 
   refreshLines(S);
 
+  if (touchMode) {
+    // The four numbers worth having in front of you the whole time; everything
+    // else is a tap away in the wind-and-tide sheet.
+    el("tt-stw").textContent  = fmtKn(hypot(S._ua, S._va));
+    el("tt-hdg").textContent  = fmtDeg(S.psi);
+    el("tt-rot").textContent  = Math.abs(rot) < 0.1 ? "steady"
+      : `${Math.abs(rot).toFixed(1)}° ${rot > 0 ? "stbd" : "port"}`;
+    el("tt-wind").textContent = `${toKn(ws).toFixed(0)} kn ${fmtDeg(W.dir)}`;
+    syncTouchButtons();
+  }
+
   // What the selected line could actually reach from here.
   const ln = S.lines[S.selLine];
   let best = null;
@@ -3427,14 +3968,18 @@ function updateHud(S, env) {
     const nb = nearestBollard(S.X + cw.x, S.Y + cw.y, LINE.rangeMax);
     if (nb && (!best || nb.dist < best.dist)) best = nb;
   }
-  let h = `<b style="color:var(--accent)">${ln.name}</b> line selected &nbsp;<kbd>Z</kbd><kbd>C</kbd><br>`;
+  let h = `<b style="color:var(--accent)">${ln.name}</b> line selected` +
+          (touchMode ? `` : ` &nbsp;<kbd>Z</kbd><kbd>C</kbd>`) + `<br>`;
   if (pending.digits) {
     h += `throwing to bollard <b style="color:var(--accent)">${pending.digits}_</b> — ` +
          `keep typing, or wait`;
   } else if (best) {
     h += `nearest in range: <b>${best.bollard.n}</b> at ${best.dist.toFixed(1)} m<br>` +
-         `<kbd>G</kbd> throw to it &nbsp; or click a bollard &nbsp; or type its number` +
-         (ln.bollard != null && !ln.madeFast ? ` &nbsp; <kbd>Enter</kbd> make fast` : "");
+         (touchMode
+           ? `tap THROW for it, or tap the bollard itself on the chart` +
+             (ln.bollard != null && !ln.madeFast ? ` &nbsp; then MAKE FAST` : "")
+           : `<kbd>G</kbd> throw to it &nbsp; or click a bollard &nbsp; or type its number` +
+             (ln.bollard != null && !ln.madeFast ? ` &nbsp; <kbd>Enter</kbd> make fast` : ""));
   } else {
     h += `nothing within ${LINE.rangeMax} m of that cleat yet`;
   }
@@ -3679,6 +4224,7 @@ function wireUi() {
 
   buildDials();
   wireDials();
+  wireTouch();
 }
 
 /* Camera: follow with a soft spring, and zoom in on its own as she closes on
@@ -3750,13 +4296,15 @@ function frame(now) {
   const cp = el("p-coach");
   if (all.length) {
     cp.style.display = "block";
-    el("coach-msgs").innerHTML = all.slice(0, 4).map((m) => `<div class="msg">${m}</div>`).join("");
+    // A phone has no room for four lines of advice on top of everything else.
+    const room = touchMode && NARROW.matches ? 2 : 4;
+    el("coach-msgs").innerHTML = all.slice(0, room).map((m) => `<div class="msg">${m}</div>`).join("");
   } else cp.style.display = "none";
 
   if (paused) {
     cx2.fillStyle = "rgba(232,238,242,0.85)";
     cx2.font = "600 15px ui-monospace, monospace";
-    cx2.fillText("PAUSED", innerWidth / 2 - 26, 58);
+    cx2.fillText("PAUSED", innerWidth / 2 - 26, touchMode ? 78 : 58);
   }
 }
 
